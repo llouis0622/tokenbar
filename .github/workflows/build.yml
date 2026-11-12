@@ -29,6 +29,11 @@ jobs:
       - name: Package app
         run: |
           ./build-app.sh
+          codesign --verify --strict --verbose=2 TokenBar.app
+          codesign -d --verbose=2 TokenBar.app 2>&1 | grep -E "flags|Identifier"
+          plutil -p TokenBar.app/Contents/Info.plist
+          test -f TokenBar.app/Contents/Resources/AppIcon.icns
+          ls -l TokenBar.app/Contents/MacOS/TokenBar
           ditto -c -k --keepParent TokenBar.app TokenBar.zip
       - uses: actions/upload-artifact@v4
         with:

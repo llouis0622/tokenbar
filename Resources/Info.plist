@@ -6,6 +6,8 @@
     <string>ko</string>
     <key>CFBundleExecutable</key>
     <string>TokenBar</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>io.github.llouis0622.tokenbar</string>
     <key>CFBundleInfoDictionaryVersion</key>
