@@ -5,8 +5,9 @@ cd "$(dirname "$0")"
 APP="TokenBar.app"
 VERSION="$(tr -d '[:space:]' < VERSION)"
 
-swift build -c release
-BIN="$(swift build -c release --show-bin-path)/TokenBar"
+FLAGS=(-c release --build-system native)
+swift build "${FLAGS[@]}"
+BIN="$(swift build "${FLAGS[@]}" --show-bin-path)/TokenBar"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
