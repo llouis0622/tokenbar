@@ -178,8 +178,7 @@ struct WindowRow: View {
                     .font(.callout.monospacedDigit())
                     .fontWeight(.semibold)
             }
-            ProgressView(value: min(max(window.usedPercent, 0), 100), total: 100)
-                .tint(tint)
+            UsageBar(fraction: min(max(window.usedPercent, 0), 100) / 100)
             if let resetsAt = window.resetsAt {
                 Text(Format.countdown(to: resetsAt))
                     .font(.caption)
@@ -187,11 +186,24 @@ struct WindowRow: View {
             }
         }
     }
+}
 
-    private var tint: Color {
-        if window.usedPercent >= 90 { return .red }
-        if window.usedPercent >= 70 { return .orange }
-        return .primary
+struct UsageBar: View {
+    static let navy = Color(red: 0, green: 0, blue: 128.0 / 255.0)
+
+    let fraction: Double
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.primary.opacity(0.22))
+                Capsule()
+                    .fill(Self.navy)
+                    .frame(width: fraction > 0 ? max(proxy.size.width * fraction, 6) : 0)
+            }
+        }
+        .frame(height: 6)
     }
 }
 
