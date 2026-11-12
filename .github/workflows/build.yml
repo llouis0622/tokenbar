@@ -1,0 +1,37 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Sources/**"
+      - "Tests/**"
+      - "Package.swift"
+      - "build-app.sh"
+      - "Resources/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      - name: Test
+        run: swift test
+      - name: Package app
+        run: |
+          ./build-app.sh
+          ditto -c -k --keepParent TokenBar.app TokenBar.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TokenBar
+          path: TokenBar.zip
+          retention-days: 14
