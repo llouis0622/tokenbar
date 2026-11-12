@@ -40,14 +40,6 @@ public enum CostCalculator {
         }
         return CostReport(byPeriod: byPeriod, generatedAt: now)
     }
-
-    public static func report(entries: [UsageEntry], prices: PriceTable, now: Date, calendar: Calendar = .current) -> CostReport {
-        var aggregate = UsageAggregate(now: now, calendar: calendar)
-        for entry in entries {
-            aggregate.add(provider: entry.provider, model: entry.model, timestamp: entry.timestamp, usage: entry.usage)
-        }
-        return report(aggregate: aggregate, prices: prices, now: now)
-    }
 }
 
 public actor UsageEngine {

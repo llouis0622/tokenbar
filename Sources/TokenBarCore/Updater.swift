@@ -20,8 +20,9 @@ public struct ReleaseInfo: Equatable, Sendable {
 }
 
 public actor Updater {
+    public static let repository = "llouis0622/tokenbar"
     public static let bundleIdentifier = "io.github.llouis0622.tokenbar"
-    public static let latestRelease = URL(string: "https://api.github.com/repos/llouis0622/tokenbar/releases/latest")!
+    public static let latestRelease = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
     static let archiveName = "TokenBar.zip"
     static let checksumName = "TokenBar.zip.sha256"
 

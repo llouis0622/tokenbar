@@ -291,13 +291,12 @@ final class TokenBarCoreTests: XCTestCase {
         calendar.timeZone = TimeZone(identifier: "Asia/Seoul")!
         let now = DateParsing.parse("2026-11-12T12:00:00+09:00")!
         let usage = TokenUsage(input: 1_000_000)
-        let entries = [
-            UsageEntry(provider: .claude, model: "claude-sonnet-4-5", timestamp: DateParsing.parse("2026-11-12T00:30:00+09:00")!, usage: usage),
-            UsageEntry(provider: .claude, model: "claude-sonnet-4-5", timestamp: DateParsing.parse("2026-11-11T23:30:00+09:00")!, usage: usage),
-            UsageEntry(provider: .codex, model: "gpt-5-codex", timestamp: DateParsing.parse("2026-10-20T10:00:00+09:00")!, usage: usage),
-            UsageEntry(provider: .codex, model: "mystery-model", timestamp: DateParsing.parse("2026-11-12T10:00:00+09:00")!, usage: usage),
-        ]
-        let report = CostCalculator.report(entries: entries, prices: PriceTable(), now: now, calendar: calendar)
+        var aggregate = UsageAggregate(now: now, calendar: calendar)
+        aggregate.add(provider: .claude, model: "claude-sonnet-4-5", timestamp: DateParsing.parse("2026-11-12T00:30:00+09:00")!, usage: usage)
+        aggregate.add(provider: .claude, model: "claude-sonnet-4-5", timestamp: DateParsing.parse("2026-11-11T23:30:00+09:00")!, usage: usage)
+        aggregate.add(provider: .codex, model: "gpt-5-codex", timestamp: DateParsing.parse("2026-10-20T10:00:00+09:00")!, usage: usage)
+        aggregate.add(provider: .codex, model: "mystery-model", timestamp: DateParsing.parse("2026-11-12T10:00:00+09:00")!, usage: usage)
+        let report = CostCalculator.report(aggregate: aggregate, prices: PriceTable(), now: now)
         XCTAssertEqual(report.summary(.today, .claude).cost, 3, accuracy: 0.0001)
         XCTAssertEqual(report.summary(.week, .claude).cost, 6, accuracy: 0.0001)
         XCTAssertEqual(report.summary(.week, .codex).cost, 0, accuracy: 0.0001)

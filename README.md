@@ -1,155 +1,60 @@
 # TokenBar
 
-Claude·ChatGPT(Codex) 구독 한도 사용률과 시스템 상태를 macOS 메뉴바 2줄에 띄워주는 작은 네이티브 앱.
+Claude·ChatGPT(Codex) 구독 한도와 시스템 상태를 macOS 메뉴바 2줄로 보여주는 가벼운 네이티브 앱.
 
 ```
 C 18%  CPU 33%  RAM 83%  ↑9.0K
 G  0%  GPU 59%  DSK 51%  ↓8.0K
 ```
 
-- `C` Claude 5시간 한도 사용률, `G` ChatGPT·Codex 5시간 한도 사용률
-- CPU·GPU 사용률, 메모리·디스크 사용률, 네트워크 업·다운 속도 (2초마다 갱신)
-- 클릭하면 5시간·주간 한도 바, 리셋까지 남은 시간, 시스템 상세(온도·메모리 용량·디스크 여유), API 환산 비용(오늘 / 7일 / 30일)
-
-## 무엇을 보여주나
-
-| 항목 | 출처 | 웹·앱 사용분 포함 |
-| --- | --- | --- |
-| Claude 한도 % | `api.anthropic.com/api/oauth/usage` (Claude Code OAuth 토큰) | 포함 (구독 한도는 웹·앱·CLI 합산) |
-| ChatGPT·Codex 한도 % | `chatgpt.com/backend-api/wham/usage` (`~/.codex/auth.json` 토큰) | Codex 한도 기준 |
-| API 환산 비용 | `~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl` | 미포함 (CLI 로컬 로그만) |
-
-- 웹·데스크톱 앱 대화는 로컬에 토큰 로그를 남기지 않아 토큰 수·비용으로는 집계할 수 없음. 대신 구독 한도 %가 전체 사용량을 반영.
-- 두 한도 API는 공식 문서화된 엔드포인트가 아니라서 응답 형식이 바뀌면 표시가 멈출 수 있음. 이 경우 마지막 값(캐시)과 Codex 로컬 로그의 `rate_limits` 값으로 대체 표시.
+클릭하면 5시간·주간 한도와 리셋 시각, 시스템 상세, API 환산 비용(오늘 / 7일 / 30일)이 펼쳐짐.
 
 ## 설치
 
-요구 사항: macOS 14 이상 (Apple Silicon·Intel 공용)
+macOS 14 이상 (Apple Silicon·Intel 공용)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/llouis0622/tokenbar/main/install.sh | bash
 ```
 
-최신 릴리스를 받아 체크섬과 코드 서명을 확인한 뒤 `/Applications/TokenBar.app`으로 설치하고 바로 실행함. Dock 아이콘 없이 메뉴바에만 표시. 빌드 도구 불필요.
-
-## 업데이트
-
-- 메뉴 맨 아래에 현재 버전이 보이고, 새 버전이 있으면 "업데이트" 버튼이 나타남
-- 버튼을 누르면 새 버전을 내려받아 검증 → 앱 교체 → 자동 재시작 (몇 초)
-- 새 버전 확인은 실행 직후와 6시간마다 GitHub Releases API 1회 호출
-- 터미널·소스 폴더·빌드 도구 모두 필요 없음
-
-## 직접 빌드
-
-Xcode Command Line Tools 필요.
-
-```bash
-git clone https://github.com/llouis0622/tokenbar.git
-cd tokenbar
-./build-app.sh --install
-```
-
-## 사전 조건
-
-- Claude: 터미널에서 `claude` 실행 후 `/login` 된 상태
-- Codex: `codex login` 으로 ChatGPT 계정 로그인 된 상태 (API 키 로그인은 구독 한도가 없음)
-
-둘 중 하나만 써도 동작하며, 없는 쪽은 `–` 로 표시.
-
-## 가볍게 유지하는 방식
-
-- 상태바는 AppKit `NSStatusItem`에 직접 그림. 드롭다운(SwiftUI)은 열 때 만들고 닫으면 해제
-- 평소에 도는 작업은 두 가지뿐
-  - 시스템 수치 측정: 2초마다 (저전력 모드 5초), 타이머 허용 오차를 둬서 다른 작업과 묶여 깨어남. 표시 문자열이 바뀔 때만 다시 그림
-  - 한도 조회: 5분마다 HTTPS 요청 2건
-- 화면이 꺼지면 두 타이머 모두 정지, 켜지면 재개
-- 비용 계산(로그 스캔)은 메뉴를 열 때만 실행
-  - 파일별로 읽은 위치를 기억해 추가된 줄만 파싱, 1MB 단위로 끊어 읽음
-  - 기록은 메시지당 40바이트 정도의 숫자 구조체로만 보관
-- 온도 센서는 메뉴가 열려 있을 때만 읽음
-- 디스크에 쓰는 것: `limits.json`, `prices.json`. HTTP 캐시·쿠키 없음
-
-## 보안
-
-- 토큰 취급
-  - Claude Code·Codex CLI가 이미 저장해 둔 OAuth 토큰을 읽기만 함. 갱신·재발급·파일 저장·로그 출력 없음
-  - Claude 토큰은 `/usr/bin/security`로 키체인에서 읽고 만료 전까지 메모리에만 보관
-  - 토큰은 `api.anthropic.com`, `chatgpt.com` 두 곳으로만 전송
-- 네트워크
-  - 허용 목록(Anthropic·ChatGPT 사용량 API, GitHub 릴리스·가격표) 이외 호스트와 HTTPS 이외 스킴은 요청 자체를 거부
-  - 토큰이 실린 요청은 리다이렉트를 따라가지 않음. 그 외 요청도 허용 목록 안에서만 따라감
-  - TLS 1.2 이상, 임시 세션(쿠키·캐시·자격 증명 저장소 없음), 응답 크기 16MB 상한
-  - 수신 포트를 열지 않음. 외부에서 이 앱으로 접속할 수 있는 경로 없음
-- 로컬 데이터
-  - 로그에서 토큰 숫자·모델명·시각만 읽음. 대화 내용은 읽거나 저장하지 않음
-  - 데이터 폴더 권한 700, 파일 권한 600
-- 실행 파일
-  - Hardened Runtime으로 서명 (라이브러리 주입·디버거 연결 차단), 외부 의존성 0
-  - 외부 프로세스는 절대 경로(`/usr/bin/security`, `/usr/bin/ditto`, `/usr/bin/codesign`, `/usr/bin/open`)와 인자 배열로만 실행. 셸 문자열 조합 없음
-- 업데이트
-  - `github.com/llouis0622/tokenbar` 릴리스만 사용. 초안·프리릴리스·낮은 버전은 무시 (다운그레이드 불가)
-  - 설치 전 확인: SHA-256 체크섬 일치, 번들 ID와 버전 일치, 코드 서명 무결성. 하나라도 어긋나면 기존 앱을 그대로 둠
-  - 릴리스는 GitHub Actions가 이 레포의 코드로 빌드해 올림. 신뢰 범위는 이 레포에 푸시할 수 있는 계정과 같으므로 계정 2단계 인증 권장
-- 한계
-  - App Sandbox 미적용 (`~/.claude`, `~/.codex`, 키체인 읽기에 필요)
-  - 애드혹 서명이라 Apple 공증은 없음. 체크섬은 전송 중 손상·바꿔치기를 막지만 GitHub 계정 자체가 탈취된 경우까지 막지는 못함
-  - 같은 사용자 계정으로 실행되는 다른 프로그램은 이 앱과 무관하게 CLI 토큰 파일·키체인 항목에 접근할 수 있음. 이 앱이 그 범위를 넓히지는 않음
+- `/Applications/TokenBar.app`으로 설치되고 바로 실행됨
+- 이후 업데이트는 메뉴 맨 아래 "업데이트" 버튼으로 진행
+- 한도 표시에는 Claude Code(`claude` → `/login`) 또는 Codex CLI(`codex login`) 로그인이 필요. 없는 쪽은 `–` 로 표시
+- 제거: `pkill -x TokenBar; rm -rf /Applications/TokenBar.app ~/Library/Application\ Support/TokenBar`
 
 ## 동작 방식
 
-- 제공자별 한도 API 호출은 최소 60초 간격. HTTP 429 응답 시 `Retry-After` 또는 최소 5분 대기 후 재시도, 그동안 마지막 값 유지
-- 토큰이 만료되면 해당 CLI를 한 번 실행하면 갱신됨
+- 한도 사용률
+  - `C` Claude, `G` ChatGPT·Codex의 5시간 한도 사용률. 5분마다 조회
+  - CLI가 저장해 둔 로그인 토큰을 읽기만 해서 각 서비스의 사용량 API를 호출. 토큰을 갱신·저장하지 않음
+  - Claude 한도는 웹·앱·CLI 사용분이 합산된 값
+  - 조회에 실패하면 마지막 값을 유지하고, 토큰이 만료되면 해당 CLI를 한 번 실행하면 복구됨
+- API 환산 비용
+  - `~/.claude`, `~/.codex`의 CLI 로그에서 토큰 수와 모델명만 읽어 API 단가로 환산. 대화 내용은 읽지 않음
+  - 메뉴를 열 때만 계산하며, 이미 읽은 파일은 추가된 부분만 다시 읽음
+  - 웹·데스크톱 앱 사용분은 로컬 로그가 없어 포함되지 않음
+  - 단가를 직접 지정하려면 `~/Library/Application Support/TokenBar/pricing.override.json` 작성 (USD / 100만 토큰)
+- 가볍게 상주
+  - 평소에는 2초 주기 시스템 측정과 5분 주기 한도 조회만 실행. 화면이 꺼지면 모두 정지
+  - 드롭다운은 열 때 만들고 닫으면 해제
+- 보안
+  - 토큰은 `api.anthropic.com`, `chatgpt.com`으로만 전송. 허용 목록 밖 호스트와 HTTPS 이외 요청은 거부
+  - 수신 포트를 열지 않고, 외부 의존성 없이 Hardened Runtime으로 서명
+  - 업데이트는 이 레포의 릴리스만 받아 체크섬·번들 ID·버전·코드 서명을 확인한 뒤 교체
 
 ## 시스템 수치
 
-- CPU·메모리: Mach `host_statistics`, GPU: IOKit `IOAccelerator`의 `Device Utilization %`, 디스크: 시스템 볼륨 여유 공간, 네트워크: `en*` 인터페이스 바이트 카운터 차이
-- 온도는 드롭다운을 열었을 때만 측정. Apple Silicon의 비공개 HID 센서 API를 쓰므로 macOS 업데이트로 읽지 못하게 되면 온도 칸만 비워짐
-  - M1 계열은 CPU·GPU 온도를 따로 표시, 센서 이름이 `PMU tdie`로만 나오는 칩은 CPU 온도(다이 평균)만 표시
+| 표시 | 내용 | 갱신 |
+| --- | --- | --- |
+| CPU | 전체 코어 사용률 | 2초 (저전력 모드 5초) |
+| GPU | GPU 사용률 | 2초 |
+| RAM | 메모리 사용률 (드롭다운에 사용량 / 전체) | 2초 |
+| DSK | 시스템 디스크 사용률 (드롭다운에 남은 용량) | 2초 |
+| ↑ ↓ | 네트워크 업로드·다운로드 속도 (초당 바이트) | 2초 |
+| 온도 | CPU·GPU 온도. 드롭다운에만 표시 | 메뉴가 열려 있을 때 |
 
-## 비용 계산
+온도는 Apple Silicon 센서에서 읽으며, 칩에 따라 GPU 온도가 따로 나오지 않거나 표시되지 않을 수 있음.
 
-- 단가는 [LiteLLM 가격표](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)를 하루 한 번 받아 사용
-- 가격표에 없는 모델은 계열별 기본 단가(`Sources/TokenBarCore/Pricing.swift`의 `families`)로 근사
-- 직접 지정하려면 `~/Library/Application Support/TokenBar/pricing.override.json` 작성 (USD / 100만 토큰)
+## 라이선스
 
-```json
-{
-  "claude-opus-4-5": { "input": 5, "output": 25, "cacheWrite5m": 6.25, "cacheWrite1h": 10, "cacheRead": 0.5 }
-}
-```
-
-- 구독 사용자는 이 금액을 실제로 내지 않음. "API로 썼다면 얼마였을지"의 참고 수치
-
-## 구조
-
-```
-Sources/TokenBarCore   한도 조회, 로그 스캔, 단가, 시스템 측정, 업데이트, 포맷
-Sources/CSensors       온도 센서 읽기 (C)
-Sources/TokenBar       NSStatusItem 2줄 렌더링, 드롭다운(SwiftUI)
-Resources              Info.plist, 앱 아이콘
-Tests/TokenBarCoreTests
-build-app.sh           릴리스 빌드 → TokenBar.app 패키징 (--install)
-install.sh             최신 릴리스 내려받아 설치
-```
-
-로컬 데이터: `~/Library/Application Support/TokenBar/` (`limits.json`, `prices.json`)
-
-## 개발
-
-```bash
-swift test
-swift run TokenBar
-```
-
-## 제거
-
-```bash
-pkill -x TokenBar
-rm -rf /Applications/TokenBar.app ~/Library/Application\ Support/TokenBar
-```
-
-## 참고한 프로젝트
-
-- [seoyeon1123/tokenplant](https://github.com/seoyeon1123/tokenplant)
-- [steipete/CodexBar](https://github.com/steipete/CodexBar)
-- [grzegorz-raczek-unit8/claude-quota](https://github.com/grzegorz-raczek-unit8/claude-quota)
+[MIT](LICENSE)

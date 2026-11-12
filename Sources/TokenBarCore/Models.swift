@@ -10,13 +10,6 @@ public enum Provider: String, Codable, CaseIterable, Sendable {
         case .codex: return "ChatGPT · Codex"
         }
     }
-
-    public var short: String {
-        switch self {
-        case .claude: return "C"
-        case .codex: return "G"
-        }
-    }
 }
 
 public struct LimitWindow: Codable, Equatable, Sendable {
@@ -92,20 +85,6 @@ public struct TokenUsage: Equatable, Sendable {
     }
 
     public var total: Int { input + output + cacheWrite5m + cacheWrite1h + cacheRead }
-}
-
-public struct UsageEntry: Equatable, Sendable {
-    public let provider: Provider
-    public let model: String
-    public let timestamp: Date
-    public let usage: TokenUsage
-
-    public init(provider: Provider, model: String, timestamp: Date, usage: TokenUsage) {
-        self.provider = provider
-        self.model = model
-        self.timestamp = timestamp
-        self.usage = usage
-    }
 }
 
 public enum Period: String, CaseIterable, Sendable {

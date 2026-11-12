@@ -2,7 +2,8 @@
 set -euo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 
-BASE="https://github.com/llouis0622/tokenbar/releases/latest/download"
+REPO="llouis0622/tokenbar"
+BASE="https://github.com/$REPO/releases/latest/download"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
