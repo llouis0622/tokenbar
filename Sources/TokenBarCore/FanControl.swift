@@ -16,6 +16,15 @@ public struct FanInfo: Equatable, Sendable, Identifiable {
         return min(max(rpm, Int(minimum.rounded(.up))), Int(maximum.rounded(.down)))
     }
 
+    static func readSpeeds() -> [Int] {
+        var speeds: [Int] = []
+        for index in 0..<Int(tb_fan_count()) {
+            let rpm = tb_fan_actual(Int32(index))
+            if rpm >= 0 { speeds.append(Int(rpm.rounded())) }
+        }
+        return speeds
+    }
+
     static func readAll() -> [FanInfo] {
         var fans: [FanInfo] = []
         for index in 0..<Int(tb_fan_count()) {

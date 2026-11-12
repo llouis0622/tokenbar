@@ -15,6 +15,7 @@ public struct SystemSample: Equatable, Sendable {
     public var cpuTemperature: Double?
     public var gpuTemperature: Double?
     public var fans: [FanInfo] = []
+    public var fanSpeeds: [Int] = []
 
     public var memoryPercent: Double? {
         memoryTotal > 0 ? Double(memoryUsed) / Double(memoryTotal) * 100 : nil
@@ -63,6 +64,9 @@ public actor SystemMonitor {
         )
         if includeFans {
             result.fans = FanInfo.readAll()
+            result.fanSpeeds = result.fans.map { Int($0.actual.rounded()) }
+        } else {
+            result.fanSpeeds = FanInfo.readSpeeds()
         }
         if includeTemperatures {
             var cpu = -1.0

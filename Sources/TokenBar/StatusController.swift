@@ -9,7 +9,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
     private let popover = NSPopover()
     private var systemTimer: Timer?
     private var limitTimer: Timer?
-    private var lastCells: [[BarCell]] = []
+    private var lastColumns: [BarColumn] = []
     private var asleep = false
 
     override init() {
@@ -100,10 +100,10 @@ final class StatusController: NSObject, NSPopoverDelegate {
     }
 
     private func renderBar() {
-        let cells = store.barCells
-        guard cells != lastCells else { return }
-        lastCells = cells
-        statusItem.button?.image = MenuBarRenderer.image(columns: cells)
+        let columns = store.barColumns
+        guard columns != lastColumns else { return }
+        lastColumns = columns
+        statusItem.button?.image = MenuBarRenderer.image(columns: columns)
     }
 
     @objc private func togglePopover() {

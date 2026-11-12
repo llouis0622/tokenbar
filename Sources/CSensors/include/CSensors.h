@@ -13,6 +13,7 @@ void tb_read_temperatures(double *cpu, double *gpu);
 
 int tb_fan_count(void);
 int tb_fan_read(int index, tb_fan_info *info);
+double tb_fan_actual(int index);
 int tb_fan_set_manual(int index, double rpm);
 int tb_fan_set_auto(int index);
 

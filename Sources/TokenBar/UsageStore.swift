@@ -40,25 +40,30 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    var barCells: [[BarCell]] {
-        [
-            [
+    var barColumns: [BarColumn] {
+        var columns: [BarColumn] = [
+            .cells([
                 BarCell(label: "C", value: limitText(.claude), widest: "100%"),
                 BarCell(label: "G", value: limitText(.codex), widest: "100%"),
-            ],
-            [
+            ]),
+            .cells([
                 BarCell(label: "CPU", value: percentText(system?.cpu), widest: "100%"),
                 BarCell(label: "GPU", value: percentText(system?.gpu), widest: "100%"),
-            ],
-            [
+            ]),
+            .cells([
                 BarCell(label: "RAM", value: percentText(system?.memoryPercent), widest: "100%"),
                 BarCell(label: "DSK", value: percentText(system?.diskPercent), widest: "100%"),
-            ],
-            [
-                BarCell(label: "↑", value: Format.rate(system?.upload ?? 0), widest: "999M"),
-                BarCell(label: "↓", value: Format.rate(system?.download ?? 0), widest: "999M"),
-            ],
+            ]),
         ]
+        if let speeds = system?.fanSpeeds, !speeds.isEmpty {
+            let symbol = fanTargets.isEmpty ? "fanblades" : "fanblades.fill"
+            columns.append(.icon(symbol: symbol, values: speeds.map { String($0) }, widest: "9999"))
+        }
+        columns.append(.cells([
+            BarCell(label: "↑", value: Format.rate(system?.upload ?? 0), widest: "999M"),
+            BarCell(label: "↓", value: Format.rate(system?.download ?? 0), widest: "999M"),
+        ]))
+        return columns
     }
 
     private func limitText(_ provider: Provider) -> String {

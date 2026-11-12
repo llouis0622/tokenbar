@@ -181,10 +181,20 @@ static int tb_mode_key(char *buffer, int index) {
 }
 
 int tb_fan_count(void) {
+    static int cached = -1;
+    if (cached >= 0) return cached;
     double count = 0;
-    if (!tb_read_number("FNum", &count)) return 0;
-    if (count < 0) return 0;
-    return count > TB_MAX_FANS ? TB_MAX_FANS : (int)count;
+    if (!tb_read_number("FNum", &count) || count < 0) return 0;
+    cached = count > TB_MAX_FANS ? TB_MAX_FANS : (int)count;
+    return cached;
+}
+
+double tb_fan_actual(int index) {
+    char key[5];
+    double rpm = -1;
+    if (index < 0 || index >= tb_fan_count()) return -1;
+    if (!tb_fan_key(key, index, "Ac") || !tb_read_number(key, &rpm)) return -1;
+    return rpm;
 }
 
 int tb_fan_read(int index, tb_fan_info *info) {
@@ -254,6 +264,7 @@ int tb_fan_set_auto(int index) {
 
 int tb_fan_count(void) { return 0; }
 int tb_fan_read(int index, tb_fan_info *info) { (void)index; (void)info; return 0; }
+double tb_fan_actual(int index) { (void)index; return -1; }
 int tb_fan_set_manual(int index, double rpm) { (void)index; (void)rpm; return 0; }
 int tb_fan_set_auto(int index) { (void)index; return 0; }
 
