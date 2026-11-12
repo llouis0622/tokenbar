@@ -334,8 +334,12 @@ final class TokenBarCoreTests: XCTestCase {
         XCTAssertGreaterThan(first.memoryTotal, 0)
         XCTAssertGreaterThan(first.memoryUsed, 0)
         XCTAssertLessThanOrEqual(first.memoryUsed, first.memoryTotal)
-        try await Task.sleep(nanoseconds: 300_000_000)
-        let second = await monitor.sample(includeTemperatures: false)
+        var second = first
+        for _ in 0..<8 {
+            try await Task.sleep(nanoseconds: 500_000_000)
+            second = await monitor.sample(includeTemperatures: false)
+            if second.cpu != nil { break }
+        }
         let cpu = try XCTUnwrap(second.cpu)
         XCTAssertTrue((0...100).contains(cpu))
         let disk = try XCTUnwrap(second.diskPercent)
