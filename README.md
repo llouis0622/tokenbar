@@ -1,13 +1,15 @@
 # TokenBar
 
-Claude와 ChatGPT(Codex) 구독 한도 사용률을 macOS 메뉴바에 띄워주는 작은 네이티브 앱.
+Claude·ChatGPT(Codex) 구독 한도 사용률과 시스템 상태를 macOS 메뉴바 2줄에 띄워주는 작은 네이티브 앱.
 
 ```
-C 42% · G 18%
+C 18%  CPU 33%  RAM 83%  ↑9.0K
+G  0%  GPU 59%  DSK 51%  ↓8.0K
 ```
 
 - `C` Claude 5시간 한도 사용률, `G` ChatGPT·Codex 5시간 한도 사용률
-- 클릭하면 5시간·주간 한도 바, 리셋까지 남은 시간, API 환산 비용(오늘 / 7일 / 30일)
+- CPU·GPU 사용률, 메모리·디스크 사용률, 네트워크 업·다운 속도 (2초마다 갱신)
+- 클릭하면 5시간·주간 한도 바, 리셋까지 남은 시간, 시스템 상세(온도·메모리 용량·디스크 여유), API 환산 비용(오늘 / 7일 / 30일)
 
 ## 무엇을 보여주나
 
@@ -50,6 +52,12 @@ cd tokenbar
 - 로컬 로그는 `message.usage`의 토큰 숫자와 모델명만 읽음. 대화 내용은 읽지 않음
 - 로그 파일은 크기·수정 시각이 바뀐 것만 다시 파싱
 
+## 시스템 수치
+
+- CPU·메모리: Mach `host_statistics`, GPU: IOKit `IOAccelerator`의 `Device Utilization %`, 디스크: 시스템 볼륨 여유 공간, 네트워크: `en*` 인터페이스 바이트 카운터 차이
+- 온도는 드롭다운을 열었을 때만 측정. Apple Silicon의 비공개 HID 센서 API를 쓰므로 macOS 업데이트로 읽지 못하게 되면 온도 칸만 비워짐
+  - M1 계열은 CPU·GPU 온도를 따로 표시, 센서 이름이 `PMU tdie`로만 나오는 칩은 CPU 온도(다이 평균)만 표시
+
 ## 비용 계산
 
 - 단가는 [LiteLLM 가격표](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)를 하루 한 번 받아 사용
@@ -67,8 +75,9 @@ cd tokenbar
 ## 구조
 
 ```
-Sources/TokenBarCore   Foundation만 의존. 한도 조회, 로그 스캔, 단가, 포맷
-Sources/TokenBar       SwiftUI MenuBarExtra UI
+Sources/TokenBarCore   한도 조회, 로그 스캔, 단가, 시스템 측정, 포맷
+Sources/CSensors       온도 센서 읽기 (C)
+Sources/TokenBar       SwiftUI MenuBarExtra UI, 메뉴바 2줄 이미지 렌더링
 Tests/TokenBarCoreTests
 build-app.sh           릴리스 빌드 → TokenBar.app 패키징 (--install 옵션)
 ```

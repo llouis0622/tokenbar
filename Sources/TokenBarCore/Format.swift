@@ -36,6 +36,33 @@ public enum Format {
         return "\(seconds / 86_400)일 전"
     }
 
+    public static func rate(_ bytesPerSecond: Double) -> String {
+        let value = max(bytesPerSecond, 0)
+        let units: [(limit: Double, scale: Double, suffix: String)] = [
+            (999_500, 1_000, "K"),
+            (999_500_000, 1_000_000, "M"),
+            (.infinity, 1_000_000_000, "G"),
+        ]
+        for unit in units where value < unit.limit {
+            let scaled = value / unit.scale
+            return scaled < 99.95 ? String(format: "%.1f%@", scaled, unit.suffix) : String(format: "%.0f%@", scaled, unit.suffix)
+        }
+        return "0.0K"
+    }
+
+    public static func gigabytes(_ bytes: Double) -> String {
+        let value = bytes / 1_000_000_000
+        return value >= 100 ? String(format: "%.0fGB", value) : String(format: "%.1fGB", value)
+    }
+
+    public static func memory(_ bytes: UInt64) -> String {
+        String(format: "%.1fGB", Double(bytes) / 1_073_741_824)
+    }
+
+    public static func degrees(_ value: Double) -> String {
+        "\(Int(value.rounded()))°"
+    }
+
     public static func windowLabel(seconds: Int) -> String {
         if seconds <= 0 { return "한도" }
         if seconds == 604_800 { return "주간" }

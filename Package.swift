@@ -5,7 +5,8 @@ let package = Package(
     name: "TokenBar",
     platforms: [.macOS(.v14)],
     targets: [
-        .target(name: "TokenBarCore"),
+        .target(name: "CSensors", linkerSettings: [.linkedFramework("IOKit")]),
+        .target(name: "TokenBarCore", dependencies: ["CSensors"]),
         .executableTarget(name: "TokenBar", dependencies: ["TokenBarCore"]),
         .testTarget(name: "TokenBarCoreTests", dependencies: ["TokenBarCore"]),
     ]

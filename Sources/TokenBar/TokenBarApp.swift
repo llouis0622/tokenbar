@@ -18,8 +18,7 @@ struct TokenBarApp: App {
             MenuView()
                 .environmentObject(store)
         } label: {
-            Text(store.menuTitle)
-                .monospacedDigit()
+            Image(nsImage: store.barImage)
         }
         .menuBarExtraStyle(.window)
     }

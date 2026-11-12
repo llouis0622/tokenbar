@@ -11,12 +11,21 @@ struct MenuView: View {
                 ProviderSection(provider: provider, result: store.limits[provider])
             }
             Divider()
+            SystemSection(sample: store.system)
+            Divider()
             CostSection(report: store.costs)
             Divider()
             footer
         }
         .padding(16)
         .frame(width: 320)
+        .onAppear {
+            store.menuVisible = true
+            Task { await store.sampleSystem() }
+        }
+        .onDisappear {
+            store.menuVisible = false
+        }
         .task {
             await store.refresh()
         }
@@ -187,5 +196,47 @@ struct CostSection: View {
             text += " · 단가 미등록 모델 제외"
         }
         return text
+    }
+}
+
+struct SystemSection: View {
+    let sample: SystemSample?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("시스템")
+                .font(.headline)
+            if let sample {
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+                    row("CPU", percent(sample.cpu), sample.cpuTemperature.map { Format.degrees($0) } ?? "")
+                    row("GPU", percent(sample.gpu), sample.gpuTemperature.map { Format.degrees($0) } ?? "")
+                    row("메모리", percent(sample.memoryPercent), "\(Format.memory(sample.memoryUsed)) / \(Format.memory(sample.memoryTotal))")
+                    row("디스크", percent(sample.diskPercent), sample.diskFree.map { "\(Format.gigabytes(Double($0))) 남음" } ?? "")
+                    row("네트워크", "↑ \(Format.rate(sample.upload))", "↓ \(Format.rate(sample.download))")
+                }
+            } else {
+                Text("측정 중…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func percent(_ value: Double?) -> String {
+        value.map { Format.percent($0) } ?? "–"
+    }
+
+    private func row(_ label: String, _ value: String, _ detail: String) -> some View {
+        GridRow {
+            Text(label)
+                .font(.callout)
+            Text(value)
+                .font(.callout.monospacedDigit())
+                .fontWeight(.semibold)
+                .gridColumnAlignment(.trailing)
+            Text(detail)
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
     }
 }

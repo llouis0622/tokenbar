@@ -200,4 +200,30 @@ final class TokenBarCoreTests: XCTestCase {
         XCTAssertEqual(Format.windowLabel(seconds: 18_000), "5시간")
         XCTAssertEqual(Format.windowLabel(seconds: 604_800), "주간")
     }
+
+    func testRateFormatting() {
+        XCTAssertEqual(Format.rate(0), "0.0K")
+        XCTAssertEqual(Format.rate(9_000), "9.0K")
+        XCTAssertEqual(Format.rate(123_400), "123K")
+        XCTAssertEqual(Format.rate(1_240_000), "1.2M")
+        XCTAssertEqual(Format.rate(2_500_000_000), "2.5G")
+        XCTAssertEqual(Format.degrees(59.6), "60°")
+    }
+
+    func testSystemMonitorProducesPlausibleValues() async throws {
+        let monitor = SystemMonitor()
+        let first = await monitor.sample(includeTemperatures: true)
+        XCTAssertNil(first.cpu)
+        XCTAssertGreaterThan(first.memoryTotal, 0)
+        XCTAssertGreaterThan(first.memoryUsed, 0)
+        XCTAssertLessThanOrEqual(first.memoryUsed, first.memoryTotal)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let second = await monitor.sample(includeTemperatures: false)
+        let cpu = try XCTUnwrap(second.cpu)
+        XCTAssertTrue((0...100).contains(cpu))
+        let disk = try XCTUnwrap(second.diskPercent)
+        XCTAssertTrue((0...100).contains(disk))
+        XCTAssertGreaterThanOrEqual(second.upload, 0)
+        XCTAssertGreaterThanOrEqual(second.download, 0)
+    }
 }
