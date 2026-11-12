@@ -7,7 +7,7 @@ C 18%  CPU 33%  RAM 83%  ↑9.0K
 G  0%  GPU 59%  DSK 51%  ↓8.0K
 ```
 
-클릭하면 5시간·주간 한도와 리셋 시각, 시스템 상세, API 환산 비용(오늘 / 7일 / 30일)이 펼쳐짐.
+클릭하면 5시간·주간 한도와 리셋 시각, 시스템 상세, 팬 제어, API 환산 비용(오늘 / 7일 / 30일)이 펼쳐짐.
 
 ## 설치
 
@@ -54,6 +54,15 @@ curl -fsSL https://raw.githubusercontent.com/llouis0622/tokenbar/main/install.sh
 | 온도 | CPU·GPU 온도. 드롭다운에만 표시 | 메뉴가 열려 있을 때 |
 
 온도는 Apple Silicon 센서에서 읽으며, 칩에 따라 GPU 온도가 따로 나오지 않거나 표시되지 않을 수 있음.
+
+## 팬 제어
+
+- 팬마다 "자동" 또는 "고정" 선택. 고정값은 슬라이더나 숫자 입력으로 지정하며 하드웨어 최소~최대 RPM 안으로만 적용
+- 처음 "제어 켜기"를 누를 때 관리자 암호를 한 번 입력. 팬 속도만 바꾸는 작은 root 헬퍼(`/Library/PrivilegedHelperTools/io.github.llouis0622.tokenbar.fan`)와 그 헬퍼만 암호 없이 실행하게 하는 sudoers 규칙(`/etc/sudoers.d/tokenbar-fan`)이 설치됨
+- 헬퍼가 받는 명령은 `auto`, `set <팬> <RPM>` 두 가지뿐
+- 고정 중 CPU 온도가 90°C를 넘으면 자동 모드로 복귀. 앱을 "종료" 버튼으로 끌 때도 자동으로 복귀하고, 잠자기에서 깨어나면 고정값을 다시 적용
+- "제어 끄기"를 누르면 헬퍼와 규칙을 모두 삭제
+- Apple Silicon 전용. 팬이 없는 모델에서는 표시되지 않음
 
 ## 라이선스
 
