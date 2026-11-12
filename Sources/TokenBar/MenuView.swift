@@ -189,17 +189,21 @@ struct WindowRow: View {
 }
 
 struct UsageBar: View {
-    static let navy = Color(red: 0, green: 0, blue: 128.0 / 255.0)
-
     let fraction: Double
+
+    private var tint: Color {
+        if fraction >= 0.75 { return Color(red: 0.95, green: 0.62, blue: 0.62) }
+        if fraction >= 0.5 { return Color(red: 0.96, green: 0.77, blue: 0.56) }
+        return Color(red: 0.62, green: 0.85, blue: 0.69)
+    }
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Color.primary.opacity(0.22))
+                    .fill(Color.primary.opacity(0.15))
                 Capsule()
-                    .fill(Self.navy)
+                    .fill(tint)
                     .frame(width: fraction > 0 ? max(proxy.size.width * fraction, 6) : 0)
             }
         }
