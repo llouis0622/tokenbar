@@ -26,18 +26,9 @@ final class UsageStore: ObservableObject {
 
     init() {
         let info = Bundle.main.infoDictionary ?? [:]
-        let commit = info["TBCommit"] as? String
-        let source = info["TBSourceDir"] as? String
-        let number = info["CFBundleShortVersionString"] as? String ?? "dev"
-        let short = Updater.isCommit(commit) ? " (\(commit!.prefix(7)))" : ""
-        version = "v\(number)\(short)"
-        let support = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/TokenBar")
-        updater = Updater(
-            sourceDir: (source?.isEmpty ?? true) ? nil : source,
-            installedCommit: commit,
-            logFile: support.appendingPathComponent("update.log")
-        )
+        let number = info["CFBundleShortVersionString"] as? String ?? "0"
+        version = "v\(number)"
+        updater = Updater(currentVersion: number, bundleURL: Bundle.main.bundleURL)
     }
 
     var barCells: [[BarCell]] {
@@ -128,11 +119,16 @@ final class UsageStore: ObservableObject {
     }
 
     func applyUpdate() async {
-        update = await updater.apply()
-        guard case .updating = update else { return }
-        while case .updating = update {
-            try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)
-            update = await updater.check()
+        if case .updating = update { return }
+        update = .updating
+        let updater = self.updater
+        let result = await Task.detached(priority: .utility) {
+            await updater.install()
+        }.value
+        update = result
+        if case .installed = result {
+            Updater.relaunch(Bundle.main.bundleURL)
+            NSApp.terminate(nil)
         }
     }
 

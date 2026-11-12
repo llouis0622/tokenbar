@@ -24,12 +24,25 @@ final class RedirectBlocker: NSObject, URLSessionTaskDelegate {
         newRequest request: URLRequest,
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
-        completionHandler(nil)
+        let carriesToken = task.originalRequest?.value(forHTTPHeaderField: "Authorization") != nil
+        if !carriesToken, let target = request.url, URLSessionHTTPClient.isAllowed(target) {
+            completionHandler(request)
+        } else {
+            completionHandler(nil)
+        }
     }
 }
 
 public struct URLSessionHTTPClient: HTTPClient {
-    public static let allowedHosts: Set<String> = ["api.anthropic.com", "chatgpt.com", "raw.githubusercontent.com"]
+    public static let allowedHosts: Set<String> = [
+        "api.anthropic.com",
+        "chatgpt.com",
+        "raw.githubusercontent.com",
+        "api.github.com",
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+    ]
     public static let maxResponseBytes = 16 * 1024 * 1024
 
     private let session: URLSession

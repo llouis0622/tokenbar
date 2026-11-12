@@ -24,24 +24,30 @@ G  0%  GPU 59%  DSK 51%  ↓8.0K
 
 ## 설치
 
-요구 사항: macOS 14 이상, Xcode Command Line Tools (`xcode-select --install`)
+요구 사항: macOS 14 이상 (Apple Silicon·Intel 공용)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/llouis0622/tokenbar/main/install.sh | bash
+```
+
+최신 릴리스를 받아 체크섬과 코드 서명을 확인한 뒤 `/Applications/TokenBar.app`으로 설치하고 바로 실행함. Dock 아이콘 없이 메뉴바에만 표시. 빌드 도구 불필요.
+
+## 업데이트
+
+- 메뉴 맨 아래에 현재 버전이 보이고, 새 버전이 있으면 "업데이트" 버튼이 나타남
+- 버튼을 누르면 새 버전을 내려받아 검증 → 앱 교체 → 자동 재시작 (몇 초)
+- 새 버전 확인은 실행 직후와 6시간마다 GitHub Releases API 1회 호출
+- 터미널·소스 폴더·빌드 도구 모두 필요 없음
+
+## 직접 빌드
+
+Xcode Command Line Tools 필요.
 
 ```bash
 git clone https://github.com/llouis0622/tokenbar.git
 cd tokenbar
 ./build-app.sh --install
 ```
-
-`/Applications/TokenBar.app`으로 설치되고 바로 실행됨. Dock 아이콘 없이 메뉴바에만 표시.
-
-## 업데이트
-
-- 메뉴를 열면 맨 아래에 현재 버전과 "업데이트" 버튼이 표시됨. 터미널 작업 불필요
-- 버튼을 누르면 설치할 때 쓴 소스 폴더에서 `git pull --ff-only` → 재빌드 → 재설치 → 자동 재시작 (약 1분)
-- 새 변경이 있는지는 실행 직후와 6시간마다 `git fetch`로 확인
-- 소스 폴더를 옮기거나 지웠다면 다시 `./build-app.sh --install` 한 번 실행
-- 실패하면 `~/Library/Application Support/TokenBar/update.log` 확인
-- 터미널에서 직접 하려면 `./build-app.sh --update`
 
 ## 사전 조건
 
@@ -61,7 +67,7 @@ cd tokenbar
   - 파일별로 읽은 위치를 기억해 추가된 줄만 파싱, 1MB 단위로 끊어 읽음
   - 기록은 메시지당 40바이트 정도의 숫자 구조체로만 보관
 - 온도 센서는 메뉴가 열려 있을 때만 읽음
-- 디스크에 쓰는 것: `limits.json`, `prices.json`, 업데이트 시 `update.log`. HTTP 캐시·쿠키 없음
+- 디스크에 쓰는 것: `limits.json`, `prices.json`. HTTP 캐시·쿠키 없음
 
 ## 보안
 
@@ -70,8 +76,8 @@ cd tokenbar
   - Claude 토큰은 `/usr/bin/security`로 키체인에서 읽고 만료 전까지 메모리에만 보관
   - 토큰은 `api.anthropic.com`, `chatgpt.com` 두 곳으로만 전송
 - 네트워크
-  - 허용 목록(`api.anthropic.com`, `chatgpt.com`, `raw.githubusercontent.com`) 이외 호스트와 HTTPS 이외 스킴은 요청 자체를 거부
-  - 리다이렉트를 따라가지 않음 (토큰이 다른 호스트로 넘어가는 경로 차단)
+  - 허용 목록(Anthropic·ChatGPT 사용량 API, GitHub 릴리스·가격표) 이외 호스트와 HTTPS 이외 스킴은 요청 자체를 거부
+  - 토큰이 실린 요청은 리다이렉트를 따라가지 않음. 그 외 요청도 허용 목록 안에서만 따라감
   - TLS 1.2 이상, 임시 세션(쿠키·캐시·자격 증명 저장소 없음), 응답 크기 16MB 상한
   - 수신 포트를 열지 않음. 외부에서 이 앱으로 접속할 수 있는 경로 없음
 - 로컬 데이터
@@ -79,13 +85,14 @@ cd tokenbar
   - 데이터 폴더 권한 700, 파일 권한 600
 - 실행 파일
   - Hardened Runtime으로 서명 (라이브러리 주입·디버거 연결 차단), 외부 의존성 0
-  - 외부 프로세스는 절대 경로(`/usr/bin/security`, `/usr/bin/git`, `/bin/bash`)와 인자 배열로만 실행. 셸 문자열 조합 없음
+  - 외부 프로세스는 절대 경로(`/usr/bin/security`, `/usr/bin/ditto`, `/usr/bin/codesign`, `/usr/bin/open`)와 인자 배열로만 실행. 셸 문자열 조합 없음
 - 업데이트
-  - 소스 폴더의 `origin`이 `github.com/llouis0622/tokenbar`일 때만 진행, `--ff-only`로만 병합
-  - 받은 코드를 그대로 빌드해 실행하므로 신뢰 범위는 이 GitHub 레포에 푸시할 수 있는 계정과 같음. 계정 2단계 인증 권장
+  - `github.com/llouis0622/tokenbar` 릴리스만 사용. 초안·프리릴리스·낮은 버전은 무시 (다운그레이드 불가)
+  - 설치 전 확인: SHA-256 체크섬 일치, 번들 ID와 버전 일치, 코드 서명 무결성. 하나라도 어긋나면 기존 앱을 그대로 둠
+  - 릴리스는 GitHub Actions가 이 레포의 코드로 빌드해 올림. 신뢰 범위는 이 레포에 푸시할 수 있는 계정과 같으므로 계정 2단계 인증 권장
 - 한계
   - App Sandbox 미적용 (`~/.claude`, `~/.codex`, 키체인 읽기에 필요)
-  - 애드혹 서명이라 Apple 공증은 없음. 직접 빌드한 바이너리만 실행하는 전제
+  - 애드혹 서명이라 Apple 공증은 없음. 체크섬은 전송 중 손상·바꿔치기를 막지만 GitHub 계정 자체가 탈취된 경우까지 막지는 못함
   - 같은 사용자 계정으로 실행되는 다른 프로그램은 이 앱과 무관하게 CLI 토큰 파일·키체인 항목에 접근할 수 있음. 이 앱이 그 범위를 넓히지는 않음
 
 ## 동작 방식
@@ -121,10 +128,11 @@ Sources/CSensors       온도 센서 읽기 (C)
 Sources/TokenBar       NSStatusItem 2줄 렌더링, 드롭다운(SwiftUI)
 Resources              Info.plist, 앱 아이콘
 Tests/TokenBarCoreTests
-build-app.sh           릴리스 빌드 → TokenBar.app 패키징 (--install, --update)
+build-app.sh           릴리스 빌드 → TokenBar.app 패키징 (--install)
+install.sh             최신 릴리스 내려받아 설치
 ```
 
-로컬 데이터: `~/Library/Application Support/TokenBar/` (`limits.json`, `prices.json`, `update.log`)
+로컬 데이터: `~/Library/Application Support/TokenBar/` (`limits.json`, `prices.json`)
 
 ## 개발
 

@@ -88,17 +88,18 @@ struct UpdateRow: View {
 
     private var title: String {
         switch state {
-        case .available(let count): return "\(version) · 새 변경 \(count)건"
+        case .available(let latest): return "\(version) → v\(latest) 사용 가능"
         case .upToDate: return "\(version) · 최신"
         case .checking: return "\(version) · 확인 중…"
         case .updating: return "\(version) · 업데이트 중…"
+        case .installed: return "\(version) · 다시 시작하는 중…"
         default: return version
         }
     }
 
     private var detail: String? {
         switch state {
-        case .updating: return "빌드에 1분 정도 걸리고, 끝나면 자동으로 다시 시작됩니다."
+        case .updating: return "새 버전을 내려받아 검증한 뒤 자동으로 다시 시작합니다."
         case .unavailable(let message), .failed(let message): return message
         default: return nil
         }

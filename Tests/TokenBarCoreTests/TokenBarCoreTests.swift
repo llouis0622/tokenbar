@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import TokenBarCore
 
@@ -181,24 +182,80 @@ final class TokenBarCoreTests: XCTestCase {
         XCTAssertFalse(URLSessionHTTPClient.isAllowed(URL(string: "https://api.anthropic.com.evil.example/usage")!))
         XCTAssertFalse(URLSessionHTTPClient.isAllowed(URL(string: "https://user:pw@chatgpt.com/")!))
         XCTAssertFalse(URLSessionHTTPClient.isAllowed(URL(string: "https://example.com/")!))
+        XCTAssertTrue(URLSessionHTTPClient.isAllowed(Updater.latestRelease))
+        XCTAssertFalse(URLSessionHTTPClient.isAllowed(URL(string: "https://github.com.evil.example/x")!))
     }
 
-    func testUpdaterTrustsOnlyOwnRepository() async {
-        XCTAssertTrue(Updater.isTrusted(remote: "https://github.com/llouis0622/tokenbar.git\n"))
-        XCTAssertTrue(Updater.isTrusted(remote: "git@github.com:llouis0622/tokenbar.git"))
-        XCTAssertTrue(Updater.isTrusted(remote: "https://github.com/LLouis0622/TokenBar/"))
-        XCTAssertFalse(Updater.isTrusted(remote: "https://github.com/someone/tokenbar.git"))
-        XCTAssertFalse(Updater.isTrusted(remote: "https://github.com/llouis0622/tokenbar.evil.example/x"))
-        XCTAssertTrue(Updater.isCommit(String(repeating: "a1", count: 20)))
-        XCTAssertFalse(Updater.isCommit("unknown"))
-        XCTAssertFalse(Updater.isCommit("main; rm -rf ~"))
+    func testVersionComparison() {
+        XCTAssertTrue(Updater.isNewer("v0.4.0", than: "0.3.0"))
+        XCTAssertTrue(Updater.isNewer("0.10.0", than: "0.9.9"))
+        XCTAssertTrue(Updater.isNewer("1.0", than: "0.99.99"))
+        XCTAssertFalse(Updater.isNewer("0.3.0", than: "0.3.0"))
+        XCTAssertFalse(Updater.isNewer("0.2.9", than: "0.3.0"))
+        XCTAssertFalse(Updater.isNewer("latest", than: "0.3.0"))
+        XCTAssertFalse(Updater.isNewer("9.9.9; rm -rf ~", than: "0.3.0"))
+        XCTAssertNil(Updater.components("1..2"))
+    }
 
-        let log = temp.appendingPathComponent("update.log")
-        let missing = Updater(sourceDir: nil, installedCommit: nil, logFile: log)
-        if case .unavailable = await missing.check() {} else { XCTFail("expected unavailable") }
-        let foreign = Updater(sourceDir: temp.path, installedCommit: nil, logFile: log)
-        if case .unavailable = await foreign.apply() {} else { XCTFail("expected unavailable") }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: log.path))
+    func testReleaseParsingAcceptsOnlyTrustedAssets() {
+        let hash = String(repeating: "ab", count: 32)
+        let good = """
+        {"tag_name":"v0.4.0","draft":false,"prerelease":false,"assets":[
+          {"name":"TokenBar.zip","digest":"sha256:\(hash)","browser_download_url":"https://github.com/llouis0622/tokenbar/releases/download/v0.4.0/TokenBar.zip"},
+          {"name":"TokenBar.zip.sha256","browser_download_url":"https://github.com/llouis0622/tokenbar/releases/download/v0.4.0/TokenBar.zip.sha256"}]}
+        """
+        let release = Updater.parseRelease(Data(good.utf8))
+        XCTAssertEqual(release?.version, "0.4.0")
+        XCTAssertEqual(release?.digest, hash)
+        XCTAssertEqual(release?.archive.host, "github.com")
+        XCTAssertNotNil(release?.checksum)
+
+        let foreign = good.replacingOccurrences(of: "https://github.com/", with: "https://evil.example/")
+        XCTAssertNil(Updater.parseRelease(Data(foreign.utf8)))
+        let draft = good.replacingOccurrences(of: #""draft":false"#, with: #""draft":true"#)
+        XCTAssertNil(Updater.parseRelease(Data(draft.utf8)))
+        let unverifiable = #"{"tag_name":"v0.4.0","assets":[{"name":"TokenBar.zip","browser_download_url":"https://github.com/llouis0622/tokenbar/releases/download/v0.4.0/TokenBar.zip"}]}"#
+        XCTAssertNil(Updater.parseRelease(Data(unverifiable.utf8)))
+        XCTAssertNil(Updater.hexDigest("sha256:zz"))
+        XCTAssertEqual(Updater.hexDigest("\(hash)  TokenBar.zip\n"), hash)
+    }
+
+    func testUpdaterRefusesBadDownloads() async {
+        struct Stub: HTTPClient {
+            let archive: Data
+            let digest: String
+            func get(url: URL, headers: [String: String]) async throws -> HTTPResult {
+                if url == Updater.latestRelease {
+                    let body = """
+                    {"tag_name":"v9.0.0","assets":[{"name":"TokenBar.zip","digest":"sha256:\(digest)","browser_download_url":"https://github.com/llouis0622/tokenbar/releases/download/v9.0.0/TokenBar.zip"}]}
+                    """
+                    return HTTPResult(status: 200, data: Data(body.utf8))
+                }
+                return HTTPResult(status: 200, data: archive)
+            }
+        }
+        let bundle = temp.appendingPathComponent("TokenBar.app")
+        try? FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        let payload = Data("not a zip".utf8)
+
+        let mismatched = Updater(currentVersion: "0.3.0", bundleURL: bundle, client: Stub(archive: payload, digest: String(repeating: "0", count: 64)))
+        let available = await mismatched.check()
+        XCTAssertEqual(available, .available("9.0.0"))
+        if case .failed = await mismatched.install() {} else { XCTFail("checksum mismatch must fail") }
+
+        let matching = Updater(currentVersion: "0.3.0", bundleURL: bundle, client: Stub(archive: payload, digest: Self.sha256(payload)))
+        if case .failed = await matching.install() {} else { XCTFail("invalid archive must fail") }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: bundle.path))
+
+        let current = Updater(currentVersion: "9.0.0", bundleURL: bundle, client: Stub(archive: payload, digest: Self.sha256(payload)))
+        let state = await current.install()
+        XCTAssertEqual(state, .upToDate)
+        let misplaced = Updater(currentVersion: "0.3.0", bundleURL: temp.appendingPathComponent("Other.app"), client: Stub(archive: payload, digest: Self.sha256(payload)))
+        if case .unavailable = await misplaced.install() {} else { XCTFail("unexpected bundle name must be refused") }
+    }
+
+    private static func sha256(_ content: Data) -> String {
+        SHA256.hash(data: content).map { String(format: "%02x", $0) }.joined()
     }
 
     func testPricingLookupAndCost() {

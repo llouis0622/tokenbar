@@ -1,144 +1,199 @@
+import CryptoKit
 import Foundation
 
 public enum UpdateState: Error, Equatable, Sendable {
     case unknown
     case checking
     case upToDate
-    case available(Int)
+    case available(String)
     case updating
+    case installed
     case unavailable(String)
     case failed(String)
 }
 
+public struct ReleaseInfo: Equatable, Sendable {
+    public let version: String
+    public let archive: URL
+    public let checksum: URL?
+    public let digest: String?
+}
+
 public actor Updater {
-    public static let trustedRemotes: Set<String> = [
-        "https://github.com/llouis0622/tokenbar",
-        "git@github.com:llouis0622/tokenbar",
-        "ssh://git@github.com/llouis0622/tokenbar",
-    ]
+    public static let bundleIdentifier = "io.github.llouis0622.tokenbar"
+    public static let latestRelease = URL(string: "https://api.github.com/repos/llouis0622/tokenbar/releases/latest")!
+    static let archiveName = "TokenBar.zip"
+    static let checksumName = "TokenBar.zip.sha256"
 
-    private static let git = "/usr/bin/git"
-    private static let toolPath = "/usr/bin:/bin:/usr/sbin:/sbin"
+    private let currentVersion: String
+    private let bundleURL: URL
+    private let client: HTTPClient
+    private var installing = false
 
-    private let sourceDir: String?
-    private let installedCommit: String?
-    private let logFile: URL
-    private var running: Process?
-    private var lastExit: Int32?
-
-    public init(sourceDir: String?, installedCommit: String?, logFile: URL) {
-        self.sourceDir = sourceDir
-        self.installedCommit = installedCommit
-        self.logFile = logFile
+    public init(currentVersion: String, bundleURL: URL, client: HTTPClient = URLSessionHTTPClient()) {
+        self.currentVersion = currentVersion
+        self.bundleURL = bundleURL
+        self.client = client
     }
 
-    public static func normalize(remote: String) -> String {
-        var value = remote.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        while value.hasSuffix("/") {
-            value.removeLast()
+    public static func components(_ version: String) -> [Int]? {
+        var text = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("v") { text.removeFirst() }
+        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard (1...4).contains(parts.count) else { return nil }
+        var numbers: [Int] = []
+        for part in parts {
+            guard !part.isEmpty, part.count <= 6, part.allSatisfy({ $0.isASCII && $0.isNumber }), let number = Int(part) else { return nil }
+            numbers.append(number)
         }
-        if value.hasSuffix(".git") {
-            value.removeLast(4)
+        return numbers
+    }
+
+    public static func isNewer(_ candidate: String, than current: String) -> Bool {
+        guard let left = components(candidate), let right = components(current) else { return false }
+        for index in 0..<max(left.count, right.count) {
+            let a = index < left.count ? left[index] : 0
+            let b = index < right.count ? right[index] : 0
+            if a != b { return a > b }
         }
-        return value
+        return false
     }
 
-    public static func isTrusted(remote: String) -> Bool {
-        trustedRemotes.contains(normalize(remote: remote))
+    public static func hexDigest(_ text: String?) -> String? {
+        guard var value = text?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else { return nil }
+        if value.hasPrefix("sha256:") { value.removeFirst(7) }
+        let head = String(value.prefix(64))
+        guard head.count == 64, head.allSatisfy({ $0.isHexDigit }) else { return nil }
+        return head
     }
 
-    public static func isCommit(_ text: String?) -> Bool {
-        guard let text, text.count == 40 else { return false }
-        return text.allSatisfy { $0.isHexDigit }
-    }
-
-    private func validatedSource() -> Result<String, UpdateState> {
-        guard let sourceDir, sourceDir.hasPrefix("/") else {
-            return .failure(.unavailable("소스 폴더 정보가 없습니다. 터미널에서 ./build-app.sh --install 로 다시 설치하세요."))
+    public static func parseRelease(_ body: Data) -> ReleaseInfo? {
+        guard let root = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let tag = root["tag_name"] as? String,
+              let numbers = components(tag),
+              root["draft"] as? Bool != true,
+              root["prerelease"] as? Bool != true,
+              let assets = root["assets"] as? [[String: Any]]
+        else { return nil }
+        var archive: URL?
+        var checksum: URL?
+        var digest: String?
+        for asset in assets {
+            guard let name = asset["name"] as? String,
+                  let link = (asset["browser_download_url"] as? String).flatMap(URL.init(string:)),
+                  URLSessionHTTPClient.isAllowed(link)
+            else { continue }
+            if name == archiveName {
+                archive = link
+                digest = hexDigest(asset["digest"] as? String)
+            } else if name == checksumName {
+                checksum = link
+            }
         }
+        guard let archive, checksum != nil || digest != nil else { return nil }
+        let version = numbers.map(String.init).joined(separator: ".")
+        return ReleaseInfo(version: version, archive: archive, checksum: checksum, digest: digest)
+    }
+
+    private func latest() async -> Result<ReleaseInfo, UpdateState> {
+        let headers = ["Accept": "application/vnd.github+json", "User-Agent": "TokenBar"]
+        guard let result = try? await client.get(url: Self.latestRelease, headers: headers) else {
+            return .failure(.unavailable("업데이트 서버에 연결하지 못했습니다."))
+        }
+        if result.status == 404 { return .failure(.upToDate) }
+        guard result.status == 200, let release = Self.parseRelease(result.data) else {
+            return .failure(.unavailable("릴리스 정보를 읽지 못했습니다. (HTTP \(result.status))"))
+        }
+        return .success(release)
+    }
+
+    public func check() async -> UpdateState {
+        if installing { return .updating }
+        switch await latest() {
+        case .failure(let state): return state
+        case .success(let release):
+            return Self.isNewer(release.version, than: currentVersion) ? .available(release.version) : .upToDate
+        }
+    }
+
+    public func install() async -> UpdateState {
+        if installing { return .updating }
+        installing = true
+        defer { installing = false }
+        guard bundleURL.lastPathComponent == "TokenBar.app", !bundleURL.path.contains("/AppTranslocation/") else {
+            return .unavailable("응용 프로그램 폴더에 설치된 TokenBar.app에서만 업데이트할 수 있습니다.")
+        }
+        let release: ReleaseInfo
+        switch await latest() {
+        case .failure(let state): return state
+        case .success(let found): release = found
+        }
+        guard Self.isNewer(release.version, than: currentVersion) else { return .upToDate }
+        let binaryHeaders = ["Accept": "application/octet-stream", "User-Agent": "TokenBar"]
+        guard let archive = try? await client.get(url: release.archive, headers: binaryHeaders), archive.status == 200 else {
+            return .failed("새 버전을 내려받지 못했습니다.")
+        }
+        var expected = release.digest
+        if expected == nil, let link = release.checksum,
+           let sidecar = try? await client.get(url: link, headers: binaryHeaders), sidecar.status == 200 {
+            expected = Self.hexDigest(String(decoding: sidecar.data.prefix(256), as: UTF8.self))
+        }
+        let actual = SHA256.hash(data: archive.data).map { String(format: "%02x", $0) }.joined()
+        guard let expected, expected == actual else {
+            return .failed("내려받은 파일의 체크섬이 일치하지 않아 설치하지 않았습니다.")
+        }
+        return Self.replaceBundle(at: bundleURL, with: archive.data, release: release)
+    }
+
+    static func replaceBundle(at bundleURL: URL, with archive: Data, release: ReleaseInfo) -> UpdateState {
         let manager = FileManager.default
-        guard manager.fileExists(atPath: sourceDir + "/.git"), manager.fileExists(atPath: sourceDir + "/build-app.sh") else {
-            return .failure(.unavailable("소스 폴더를 찾을 수 없습니다: \(sourceDir)"))
+        guard let staging = try? manager.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: bundleURL, create: true) else {
+            return .failed("임시 폴더를 만들지 못했습니다.")
         }
-        let remote = Self.run(Self.git, ["-C", sourceDir, "remote", "get-url", "origin"], timeout: 10)
-        guard remote.status == 0, Self.isTrusted(remote: remote.output) else {
-            return .failure(.unavailable("소스 폴더의 원격 저장소가 llouis0622/tokenbar 가 아니어서 업데이트하지 않습니다."))
+        defer { try? manager.removeItem(at: staging) }
+        let zip = staging.appendingPathComponent(archiveName)
+        let unpacked = staging.appendingPathComponent("unpacked")
+        do {
+            try archive.write(to: zip, options: .atomic)
+        } catch {
+            return .failed("내려받은 파일을 저장하지 못했습니다.")
         }
-        return .success(sourceDir)
-    }
-
-    public func check() -> UpdateState {
-        if let running, running.isRunning { return .updating }
-        if let lastExit, lastExit != 0 {
-            return .failed("업데이트 실패 (코드 \(lastExit)). 로그: \(logFile.path)")
+        guard run("/usr/bin/ditto", ["-x", "-k", zip.path, unpacked.path], timeout: 60).status == 0 else {
+            return .failed("압축을 풀지 못했습니다.")
         }
-        let source: String
-        switch validatedSource() {
-        case .success(let path): source = path
-        case .failure(let state): return state
+        let fresh = unpacked.appendingPathComponent("TokenBar.app")
+        guard let info = NSDictionary(contentsOf: fresh.appendingPathComponent("Contents/Info.plist")),
+              info["CFBundleIdentifier"] as? String == bundleIdentifier,
+              let version = info["CFBundleShortVersionString"] as? String,
+              components(version) == components(release.version),
+              manager.isExecutableFile(atPath: fresh.appendingPathComponent("Contents/MacOS/TokenBar").path)
+        else {
+            return .failed("내려받은 앱이 TokenBar \(release.version)이 아니어서 설치하지 않았습니다.")
         }
-        let fetch = Self.run(Self.git, ["-C", source, "fetch", "--quiet", "origin", "main"], timeout: 30)
-        guard fetch.status == 0 else {
-            return .unavailable("원격 저장소를 확인하지 못했습니다. 네트워크 또는 Git 인증을 확인하세요.")
-        }
-        let remote = Self.run(Self.git, ["-C", source, "rev-parse", "origin/main"], timeout: 10)
-        let latest = remote.output.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard remote.status == 0, Self.isCommit(latest) else {
-            return .unavailable("원격 버전을 읽지 못했습니다.")
-        }
-        guard let installedCommit, Self.isCommit(installedCommit) else { return .available(1) }
-        if installedCommit == latest { return .upToDate }
-        let behind = Self.run(Self.git, ["-C", source, "rev-list", "--count", "\(installedCommit)..\(latest)"], timeout: 10)
-        let count = Int(behind.output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 1
-        return count > 0 ? .available(count) : .upToDate
-    }
-
-    public func apply() -> UpdateState {
-        if let running, running.isRunning { return .updating }
-        let source: String
-        switch validatedSource() {
-        case .success(let path): source = path
-        case .failure(let state): return state
-        }
-        FileManager.default.createFile(atPath: logFile.path, contents: nil, attributes: [.posixPermissions: 0o600])
-        guard let log = try? FileHandle(forWritingTo: logFile) else {
-            return .failed("로그 파일을 만들지 못했습니다.")
-        }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = [source + "/build-app.sh", "--update"]
-        process.currentDirectoryURL = URL(fileURLWithPath: source)
-        process.environment = Self.environment()
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = log
-        process.standardError = log
-        process.terminationHandler = { [weak self] finished in
-            let status = finished.terminationStatus
-            Task { await self?.finish(status) }
+        guard run("/usr/bin/codesign", ["--verify", "--strict", "--deep", fresh.path], timeout: 60).status == 0 else {
+            return .failed("내려받은 앱의 코드 서명이 손상되어 설치하지 않았습니다.")
         }
         do {
-            try process.run()
+            _ = try manager.replaceItemAt(bundleURL, withItemAt: fresh)
         } catch {
-            return .failed("업데이트를 시작하지 못했습니다.")
+            return .failed("앱을 교체하지 못했습니다. 응용 프로그램 폴더 쓰기 권한을 확인하세요.")
         }
-        lastExit = nil
-        running = process
-        return .updating
+        return .installed
     }
 
-    private func finish(_ status: Int32) {
-        running = nil
-        lastExit = status
+    public static func relaunch(_ bundleURL: URL) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "/bin/sleep 1; /usr/bin/open \"$1\"", "sh", bundleURL.path]
+        process.environment = environment()
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
     }
 
     private static func environment() -> [String: String] {
-        [
-            "PATH": toolPath,
-            "HOME": NSHomeDirectory(),
-            "USER": NSUserName(),
-            "LANG": "en_US.UTF-8",
-            "GIT_TERMINAL_PROMPT": "0",
-        ]
+        ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": NSHomeDirectory(), "LANG": "en_US.UTF-8"]
     }
 
     static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval) -> (status: Int32, output: String) {
