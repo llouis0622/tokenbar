@@ -45,7 +45,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
     }
 
     private var systemInterval: TimeInterval {
-        ProcessInfo.processInfo.isLowPowerModeEnabled ? 5 : 2
+        ProcessInfo.processInfo.isLowPowerModeEnabled ? 10 : 5
     }
 
     private func startTimers() {
