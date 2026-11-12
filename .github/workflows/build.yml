@@ -47,9 +47,17 @@ jobs:
           TokenBar.app/Contents/MacOS/tokenbar-fan auto all && exit 1 || test $? -eq 77
           TokenBar.app/Contents/MacOS/tokenbar-fan set 0 "1;id" && exit 1 || test $? -eq 77
           sh -n Resources/fan-helper.sh
+          TokenBar.app/Contents/MacOS/TokenBar --render-preview menubar-preview.png
           ditto -c -k --keepParent TokenBar.app TokenBar.zip
           shasum -a 256 TokenBar.zip > TokenBar.zip.sha256
           cat TokenBar.zip.sha256
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: menubar-preview
+          path: menubar-preview.png
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}

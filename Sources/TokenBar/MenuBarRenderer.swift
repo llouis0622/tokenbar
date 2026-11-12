@@ -86,13 +86,15 @@ enum MenuBarRenderer {
         return image
     }
 
-    static func rasterize(_ image: NSImage, scale: CGFloat) -> NSImage {
+    static func bitmap(_ image: NSImage, scale: CGFloat) -> NSBitmapImageRep? {
         let size = image.size
-        guard size.width >= 1, size.height >= 1,
+        let pixelsWide = Int((size.width * scale).rounded(.up))
+        let pixelsHigh = Int((size.height * scale).rounded(.up))
+        guard pixelsWide >= 1, pixelsHigh >= 1,
               let bitmap = NSBitmapImageRep(
                   bitmapDataPlanes: nil,
-                  pixelsWide: Int((size.width * scale).rounded(.up)),
-                  pixelsHigh: Int((size.height * scale).rounded(.up)),
+                  pixelsWide: pixelsWide,
+                  pixelsHigh: pixelsHigh,
                   bitsPerSample: 8,
                   samplesPerPixel: 4,
                   hasAlpha: true,
@@ -100,17 +102,43 @@ enum MenuBarRenderer {
                   colorSpaceName: .deviceRGB,
                   bytesPerRow: 0,
                   bitsPerPixel: 0
-              ),
-              let context = NSGraphicsContext(bitmapImageRep: bitmap)
-        else { return image }
+              )
+        else { return nil }
         bitmap.size = size
+        guard let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
-        image.draw(in: NSRect(origin: .zero, size: size))
+        let wanted = CGFloat(pixelsWide) / size.width
+        let applied = abs(context.cgContext.ctm.a)
+        if applied > 0, abs(applied - wanted) > 0.01 {
+            context.cgContext.scaleBy(x: wanted / applied, y: wanted / applied)
+        }
+        image.draw(in: NSRect(origin: .zero, size: size), from: .zero, operation: .copy, fraction: 1)
+        context.flushGraphics()
         NSGraphicsContext.restoreGraphicsState()
-        let result = NSImage(size: size)
+        return bitmap
+    }
+
+    static func rasterize(_ image: NSImage, scale: CGFloat) -> NSImage {
+        guard let bitmap = bitmap(image, scale: scale) else { return image }
+        let result = NSImage(size: image.size)
         result.addRepresentation(bitmap)
         return result
+    }
+
+    static func coverage(_ bitmap: NSBitmapImageRep) -> (width: Double, height: Double) {
+        var minX = bitmap.pixelsWide, maxX = -1, minY = bitmap.pixelsHigh, maxY = -1
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard let color = bitmap.colorAt(x: x, y: y), color.alphaComponent > 0.2 else { continue }
+                minX = min(minX, x)
+                maxX = max(maxX, x)
+                minY = min(minY, y)
+                maxY = max(maxY, y)
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return (0, 0) }
+        return (Double(maxX - minX + 1) / Double(bitmap.pixelsWide), Double(maxY - minY + 1) / Double(bitmap.pixelsHigh))
     }
 
     static func compose(leading: NSImage?, stats: NSImage) -> NSImage {
