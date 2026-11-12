@@ -85,4 +85,97 @@ enum MenuBarRenderer {
         image.isTemplate = true
         return image
     }
+
+    static func rasterize(_ image: NSImage, scale: CGFloat) -> NSImage {
+        let size = image.size
+        guard size.width >= 1, size.height >= 1,
+              let bitmap = NSBitmapImageRep(
+                  bitmapDataPlanes: nil,
+                  pixelsWide: Int((size.width * scale).rounded(.up)),
+                  pixelsHigh: Int((size.height * scale).rounded(.up)),
+                  bitsPerSample: 8,
+                  samplesPerPixel: 4,
+                  hasAlpha: true,
+                  isPlanar: false,
+                  colorSpaceName: .deviceRGB,
+                  bytesPerRow: 0,
+                  bitsPerPixel: 0
+              ),
+              let context = NSGraphicsContext(bitmapImageRep: bitmap)
+        else { return image }
+        bitmap.size = size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        image.draw(in: NSRect(origin: .zero, size: size))
+        NSGraphicsContext.restoreGraphicsState()
+        let result = NSImage(size: size)
+        result.addRepresentation(bitmap)
+        return result
+    }
+
+    static func compose(leading: NSImage?, stats: NSImage) -> NSImage {
+        guard let leading else {
+            stats.isTemplate = true
+            return stats
+        }
+        let offset = leading.size.width + columnGap - 2
+        let size = NSSize(width: offset + stats.size.width, height: height)
+        let image = NSImage(size: size, flipped: false) { _ in
+            leading.draw(in: NSRect(origin: .zero, size: leading.size))
+            stats.draw(in: NSRect(x: offset, y: 0, width: stats.size.width, height: stats.size.height))
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
+}
+
+enum SlimeRenderer {
+    static let frameCount = 8
+    private static let size = NSSize(width: 18, height: 22)
+
+    static func frames(scale: CGFloat) -> [NSImage] {
+        (0..<frameCount).map { MenuBarRenderer.rasterize(frame($0), scale: scale) }
+    }
+
+    private static func frame(_ index: Int) -> NSImage {
+        let phase = Double(index) / Double(frameCount)
+        var squash = 0.0
+        var lift = 0.0
+        if phase < 0.375 {
+            squash = sin(Double.pi * phase / 0.375)
+        } else {
+            let air = (phase - 0.375) / 0.625
+            lift = sin(Double.pi * air) * 6
+            squash = -0.55 * sin(Double.pi * air)
+        }
+        return NSImage(size: size, flipped: false) { _ in
+            let width = CGFloat(14 * (1 + 0.16 * squash))
+            let bodyHeight = CGFloat(10 * (1 - 0.24 * squash))
+            let center = size.width / 2
+            let left = center - width / 2
+            let right = center + width / 2
+            let bottom = CGFloat(3 + lift)
+            let top = bottom + bodyHeight
+            let corner: CGFloat = 2.5
+            let body = NSBezierPath()
+            body.move(to: NSPoint(x: left + corner, y: bottom))
+            body.line(to: NSPoint(x: right - corner, y: bottom))
+            body.curve(to: NSPoint(x: right, y: bottom + corner), controlPoint1: NSPoint(x: right, y: bottom), controlPoint2: NSPoint(x: right, y: bottom))
+            body.curve(to: NSPoint(x: center, y: top), controlPoint1: NSPoint(x: right, y: bottom + bodyHeight * 0.8), controlPoint2: NSPoint(x: center + width * 0.3, y: top))
+            body.curve(to: NSPoint(x: left, y: bottom + corner), controlPoint1: NSPoint(x: center - width * 0.3, y: top), controlPoint2: NSPoint(x: left, y: bottom + bodyHeight * 0.8))
+            body.curve(to: NSPoint(x: left + corner, y: bottom), controlPoint1: NSPoint(x: left, y: bottom), controlPoint2: NSPoint(x: left, y: bottom))
+            body.close()
+            NSColor.black.setFill()
+            body.fill()
+            NSGraphicsContext.current?.compositingOperation = .destinationOut
+            let eyeY = bottom + bodyHeight * 0.42
+            for side in [-1.0, 1.0] {
+                let eyeX = center + CGFloat(side) * width * 0.17
+                NSBezierPath(ovalIn: NSRect(x: eyeX - 1, y: eyeY - 1.3, width: 2, height: 2.6)).fill()
+            }
+            NSGraphicsContext.current?.compositingOperation = .sourceOver
+            return true
+        }
+    }
 }

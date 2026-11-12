@@ -10,6 +10,10 @@ final class StatusController: NSObject, NSPopoverDelegate {
     private var systemTimer: Timer?
     private var limitTimer: Timer?
     private var lastColumns: [BarColumn] = []
+    private var statsImage: NSImage?
+    private var slimeFrames: [NSImage] = []
+    private var slimeIndex = 0
+    private var slimeTimer: Timer?
     private var asleep = false
 
     override init() {
@@ -25,6 +29,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
         store.onChange = { [weak self] in
             self?.renderBar()
         }
+        slimeFrames = SlimeRenderer.frames(scale: backingScale)
         renderBar()
         startTimers()
         let center = NSWorkspace.shared.notificationCenter
@@ -42,6 +47,45 @@ final class StatusController: NSObject, NSPopoverDelegate {
             await store.checkForUpdate(force: false)
             await store.reapplyFans()
         }
+    }
+
+    private var backingScale: CGFloat {
+        max(NSScreen.screens.map(\.backingScaleFactor).max() ?? 2, 1)
+    }
+
+    private var slimeInterval: TimeInterval {
+        let load = min(max(store.system?.cpu ?? 0, 0), 100) / 100
+        return 1 / (1.5 + 8.5 * load)
+    }
+
+    private func scheduleSlime() {
+        slimeTimer?.invalidate()
+        slimeTimer = nil
+        guard !asleep, !ProcessInfo.processInfo.isLowPowerModeEnabled, !slimeFrames.isEmpty else {
+            if slimeIndex != 0 {
+                slimeIndex = 0
+                updateButton()
+            }
+            return
+        }
+        let interval = slimeInterval
+        let timer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.slimeIndex = (self.slimeIndex + 1) % self.slimeFrames.count
+                self.updateButton()
+                self.scheduleSlime()
+            }
+        }
+        timer.tolerance = interval * 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        slimeTimer = timer
+    }
+
+    private func updateButton() {
+        guard let stats = statsImage else { return }
+        let leading = slimeFrames.isEmpty ? nil : slimeFrames[slimeIndex % slimeFrames.count]
+        statusItem.button?.image = MenuBarRenderer.compose(leading: leading, stats: stats)
     }
 
     private var systemInterval: TimeInterval {
@@ -68,13 +112,16 @@ final class StatusController: NSObject, NSPopoverDelegate {
         limits.tolerance = 60
         RunLoop.main.add(limits, forMode: .common)
         limitTimer = limits
+        scheduleSlime()
     }
 
     private func stopTimers() {
         systemTimer?.invalidate()
         limitTimer?.invalidate()
+        slimeTimer?.invalidate()
         systemTimer = nil
         limitTimer = nil
+        slimeTimer = nil
     }
 
     @objc private func screensDidSleep() {
@@ -103,7 +150,8 @@ final class StatusController: NSObject, NSPopoverDelegate {
         let columns = store.barColumns
         guard columns != lastColumns else { return }
         lastColumns = columns
-        statusItem.button?.image = MenuBarRenderer.image(columns: columns)
+        statsImage = MenuBarRenderer.rasterize(MenuBarRenderer.image(columns: columns), scale: backingScale)
+        updateButton()
     }
 
     @objc private func togglePopover() {
