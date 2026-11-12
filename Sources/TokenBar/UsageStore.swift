@@ -12,6 +12,10 @@ final class UsageStore: ObservableObject {
     @Published private(set) var lastRefresh: Date?
     @Published private(set) var update: UpdateState = .unknown
     @Published private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @Published private(set) var fanHelperReady = false
+    @Published private(set) var fanTargets: [Int: Int] = [:]
+    @Published private(set) var fanBusy = false
+    @Published private(set) var fanNotice: String?
 
     var onChange: (() -> Void)?
 
@@ -29,6 +33,11 @@ final class UsageStore: ObservableObject {
         let number = info["CFBundleShortVersionString"] as? String ?? "0"
         version = "v\(number)"
         updater = Updater(currentVersion: number, bundleURL: Bundle.main.bundleURL)
+        if let saved = UserDefaults.standard.dictionary(forKey: Self.fanTargetsKey) as? [String: Int] {
+            for (key, rpm) in saved {
+                if let index = Int(key) { fanTargets[index] = rpm }
+            }
+        }
     }
 
     var barCells: [[BarCell]] {
@@ -65,6 +74,7 @@ final class UsageStore: ObservableObject {
         Task {
             await sampleSystem()
             await refreshLimits()
+            await refreshFanHelper()
             await refreshCosts(force: false)
             await checkForUpdate(force: false)
         }
@@ -75,10 +85,102 @@ final class UsageStore: ObservableObject {
     }
 
     func sampleSystem() async {
-        let sample = await monitor.sample(includeTemperatures: menuVisible)
+        let guarding = !fanTargets.isEmpty
+        let sample = await monitor.sample(includeTemperatures: menuVisible || guarding, includeFans: menuVisible)
+        if guarding {
+            if let temperature = sample.cpuTemperature {
+                if temperature >= FanHelper.safetyTemperature {
+                    await releaseFans(notice: "CPU 온도가 \(Int(FanHelper.safetyTemperature))°를 넘어 팬을 자동 모드로 되돌렸습니다.")
+                }
+            } else if fanNotice == nil {
+                fanNotice = "온도를 읽지 못해 과열 시 자동 복귀가 동작하지 않습니다."
+            }
+        }
         guard sample != system else { return }
         system = sample
         onChange?()
+    }
+
+    private static let fanTargetsKey = "fanTargets"
+
+    private func saveFanTargets() {
+        var stored: [String: Int] = [:]
+        for (index, rpm) in fanTargets {
+            stored[String(index)] = rpm
+        }
+        UserDefaults.standard.set(stored, forKey: Self.fanTargetsKey)
+    }
+
+    func refreshFanHelper() async {
+        fanHelperReady = await Task.detached(priority: .utility) { FanHelper.isReady() }.value
+    }
+
+    func installFanHelper() async {
+        guard !fanBusy else { return }
+        fanBusy = true
+        let bundle = Bundle.main.bundleURL
+        fanHelperReady = await Task.detached(priority: .userInitiated) { FanHelper.install(bundle: bundle) }.value
+        fanNotice = fanHelperReady ? nil : "헬퍼를 설치하지 못했습니다."
+        fanBusy = false
+    }
+
+    func removeFanHelper() async {
+        guard !fanBusy else { return }
+        fanBusy = true
+        let bundle = Bundle.main.bundleURL
+        let removed = await Task.detached(priority: .userInitiated) { FanHelper.uninstall(bundle: bundle) }.value
+        if removed {
+            fanHelperReady = false
+            fanTargets = [:]
+            saveFanTargets()
+            fanNotice = nil
+        } else {
+            fanNotice = "헬퍼를 제거하지 못했습니다."
+        }
+        fanBusy = false
+        await sampleSystem()
+    }
+
+    func setFan(_ index: Int, rpm: Int?) async {
+        guard fanHelperReady, !fanBusy else { return }
+        fanBusy = true
+        let succeeded: Bool
+        if let rpm {
+            succeeded = await Task.detached(priority: .userInitiated) { FanHelper.setManual(fan: index, rpm: rpm) }.value
+            if succeeded { fanTargets[index] = rpm }
+        } else {
+            succeeded = await Task.detached(priority: .userInitiated) { FanHelper.setAuto(fan: index) }.value
+            if succeeded { fanTargets[index] = nil }
+        }
+        fanNotice = succeeded ? nil : "팬 설정을 적용하지 못했습니다. 이 Mac에서는 지원되지 않을 수 있습니다."
+        saveFanTargets()
+        fanBusy = false
+        await sampleSystem()
+    }
+
+    func reapplyFans() async {
+        await refreshFanHelper()
+        guard fanHelperReady, !fanTargets.isEmpty, !fanBusy else { return }
+        fanBusy = true
+        let targets = fanTargets
+        await Task.detached(priority: .utility) {
+            for (index, rpm) in targets {
+                _ = FanHelper.setManual(fan: index, rpm: rpm)
+            }
+        }.value
+        fanBusy = false
+    }
+
+    private func releaseFans(notice: String?) async {
+        fanTargets = [:]
+        saveFanTargets()
+        fanNotice = notice
+        _ = await Task.detached(priority: .userInitiated) { FanHelper.setAuto(fan: nil) }.value
+    }
+
+    func shutdown() {
+        guard fanHelperReady, !fanTargets.isEmpty else { return }
+        _ = FanHelper.setAuto(fan: nil)
     }
 
     func refreshLimits() async {
@@ -127,6 +229,7 @@ final class UsageStore: ObservableObject {
         }.value
         update = result
         if case .installed = result {
+            shutdown()
             Updater.relaunch(Bundle.main.bundleURL)
             NSApp.terminate(nil)
         }

@@ -9,26 +9,36 @@ VERSION="$(tr -d '[:space:]' < VERSION)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
+PRODUCTS=(TokenBar tokenbar-fan)
 if [[ "${UNIVERSAL:-0}" == "1" ]]; then
-    SLICES=()
+    BINS=()
     for ARCH in arm64 x86_64; do
         FLAGS=(-c release --build-system native --triple "$ARCH-apple-macosx14.0")
         swift build "${FLAGS[@]}"
-        SLICES+=("$(swift build "${FLAGS[@]}" --show-bin-path)/TokenBar")
+        BINS+=("$(swift build "${FLAGS[@]}" --show-bin-path)")
     done
-    lipo -create "${SLICES[@]}" -output "$APP/Contents/MacOS/TokenBar"
+    for PRODUCT in "${PRODUCTS[@]}"; do
+        lipo -create "${BINS[0]}/$PRODUCT" "${BINS[1]}/$PRODUCT" -output "$APP/Contents/MacOS/$PRODUCT"
+    done
 else
     FLAGS=(-c release --build-system native)
     swift build "${FLAGS[@]}"
-    cp "$(swift build "${FLAGS[@]}" --show-bin-path)/TokenBar" "$APP/Contents/MacOS/TokenBar"
+    BIN="$(swift build "${FLAGS[@]}" --show-bin-path)"
+    for PRODUCT in "${PRODUCTS[@]}"; do
+        cp "$BIN/$PRODUCT" "$APP/Contents/MacOS/$PRODUCT"
+    done
 fi
 
-strip -x "$APP/Contents/MacOS/TokenBar"
+for PRODUCT in "${PRODUCTS[@]}"; do
+    strip -x "$APP/Contents/MacOS/$PRODUCT"
+done
+cp Resources/fan-helper.sh "$APP/Contents/Resources/fan-helper.sh"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 PLIST="$APP/Contents/Info.plist"
 cp Resources/Info.plist "$PLIST"
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$PLIST"
 plutil -replace CFBundleVersion -string "$VERSION" "$PLIST"
+codesign --force --options runtime --identifier io.github.llouis0622.tokenbar.fan --sign - "$APP/Contents/MacOS/tokenbar-fan"
 codesign --force --options runtime --sign - "$APP"
 echo "built $APP ($VERSION)"
 

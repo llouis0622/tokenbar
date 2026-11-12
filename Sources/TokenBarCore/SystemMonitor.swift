@@ -14,6 +14,7 @@ public struct SystemSample: Equatable, Sendable {
     public var download: Double
     public var cpuTemperature: Double?
     public var gpuTemperature: Double?
+    public var fans: [FanInfo] = []
 
     public var memoryPercent: Double? {
         memoryTotal > 0 ? Double(memoryUsed) / Double(memoryTotal) * 100 : nil
@@ -44,7 +45,7 @@ public actor SystemMonitor {
 
     public init() {}
 
-    public func sample(includeTemperatures: Bool, now: Date = Date()) -> SystemSample {
+    public func sample(includeTemperatures: Bool, includeFans: Bool = false, now: Date = Date()) -> SystemSample {
         let memory = Self.memory()
         let disk = Self.disk()
         let network = networkRates(now: now)
@@ -60,6 +61,9 @@ public actor SystemMonitor {
             cpuTemperature: nil,
             gpuTemperature: nil
         )
+        if includeFans {
+            result.fans = FanInfo.readAll()
+        }
         if includeTemperatures {
             var cpu = -1.0
             var gpu = -1.0

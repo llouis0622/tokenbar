@@ -40,6 +40,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
             await store.sampleSystem()
             await store.refreshLimits()
             await store.checkForUpdate(force: false)
+            await store.reapplyFans()
         }
     }
 
@@ -87,6 +88,8 @@ final class StatusController: NSObject, NSPopoverDelegate {
         Task {
             await store.sampleSystem()
             await store.refreshLimits()
+            try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)
+            await store.reapplyFans()
         }
     }
 

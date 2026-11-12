@@ -12,6 +12,10 @@ struct MenuView: View {
             }
             Divider()
             SystemSection(sample: store.system)
+            if let fans = store.system?.fans, !fans.isEmpty {
+                Divider()
+                FanSection(fans: fans)
+            }
             Divider()
             CostSection(report: store.costs)
             Divider()
@@ -40,6 +44,7 @@ struct MenuView: View {
                 }
                 .disabled(store.isRefreshing)
                 Button("종료") {
+                    store.shutdown()
                     NSApp.terminate(nil)
                 }
             }
@@ -311,5 +316,125 @@ struct SystemSection: View {
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+struct FanSection: View {
+    @EnvironmentObject private var store: UsageStore
+    let fans: [FanInfo]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("팬")
+                    .font(.headline)
+                Spacer()
+                if store.fanBusy {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if store.fanHelperReady {
+                    Button("제어 끄기") {
+                        Task { await store.removeFanHelper() }
+                    }
+                    .controlSize(.small)
+                } else {
+                    Button("제어 켜기") {
+                        Task { await store.installFanHelper() }
+                    }
+                    .controlSize(.small)
+                }
+            }
+            ForEach(fans) { fan in
+                FanRow(fan: fan)
+            }
+            if let notice = store.fanNotice {
+                Text(notice)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !store.fanHelperReady {
+                Text("제어를 켜면 관리자 암호를 한 번 묻고, 팬 속도만 바꾸는 작은 헬퍼를 설치합니다.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+struct FanRow: View {
+    @EnvironmentObject private var store: UsageStore
+    let fan: FanInfo
+    @State private var value: Double = 0
+    @State private var text = ""
+
+    private var isFixed: Bool {
+        store.fanTargets[fan.id] != nil
+    }
+
+    private var canControl: Bool {
+        store.fanHelperReady && !store.fanBusy && fan.isAdjustable
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("팬 \(fan.id + 1)")
+                    .font(.callout)
+                Text("\(Int(fan.actual.rounded())) RPM")
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("", selection: Binding(
+                    get: { isFixed ? 1 : 0 },
+                    set: { choice in
+                        let rpm = choice == 1 ? fan.clamped(Int(value)) : nil
+                        Task { await store.setFan(fan.id, rpm: rpm) }
+                    }
+                )) {
+                    Text("자동").tag(0)
+                    Text("고정").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 110)
+                .disabled(!canControl)
+            }
+            if isFixed, fan.isAdjustable {
+                HStack(spacing: 8) {
+                    Slider(value: $value, in: fan.minimum...fan.maximum, onEditingChanged: { editing in
+                        if !editing { apply(Int(value)) }
+                    })
+                    TextField("RPM", text: $text)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.callout.monospacedDigit())
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 62)
+                        .onSubmit {
+                            if let typed = Int(text.trimmingCharacters(in: .whitespaces)) { apply(typed) }
+                        }
+                }
+                .controlSize(.small)
+                .disabled(!canControl)
+                Text("\(Int(fan.minimum.rounded(.up)))–\(Int(fan.maximum.rounded(.down))) RPM")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .onAppear {
+            let start = fan.clamped(store.fanTargets[fan.id] ?? Int(fan.actual))
+            value = Double(start)
+            text = String(start)
+        }
+        .onChange(of: value) { _, updated in
+            text = String(Int(updated))
+        }
+    }
+
+    private func apply(_ rpm: Int) {
+        let bounded = fan.clamped(rpm)
+        value = Double(bounded)
+        text = String(bounded)
+        Task { await store.setFan(fan.id, rpm: bounded) }
     }
 }

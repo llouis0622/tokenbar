@@ -159,7 +159,7 @@ public actor Updater {
         } catch {
             return .failed("내려받은 파일을 저장하지 못했습니다.")
         }
-        guard run("/usr/bin/ditto", ["-x", "-k", zip.path, unpacked.path], timeout: 60).status == 0 else {
+        guard Shell.run("/usr/bin/ditto", ["-x", "-k", zip.path, unpacked.path], timeout: 60).status == 0 else {
             return .failed("압축을 풀지 못했습니다.")
         }
         let fresh = unpacked.appendingPathComponent("TokenBar.app")
@@ -171,7 +171,7 @@ public actor Updater {
         else {
             return .failed("내려받은 앱이 TokenBar \(release.version)이 아니어서 설치하지 않았습니다.")
         }
-        guard run("/usr/bin/codesign", ["--verify", "--strict", "--deep", fresh.path], timeout: 60).status == 0 else {
+        guard Shell.run("/usr/bin/codesign", ["--verify", "--strict", "--deep", fresh.path], timeout: 60).status == 0 else {
             return .failed("내려받은 앱의 코드 서명이 손상되어 설치하지 않았습니다.")
         }
         do {
@@ -186,38 +186,10 @@ public actor Updater {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", "/bin/sleep 1; /usr/bin/open \"$1\"", "sh", bundleURL.path]
-        process.environment = environment()
+        process.environment = Shell.environment()
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try? process.run()
-    }
-
-    private static func environment() -> [String: String] {
-        ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": NSHomeDirectory(), "LANG": "en_US.UTF-8"]
-    }
-
-    static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval) -> (status: Int32, output: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.environment = environment()
-        process.standardInput = FileHandle.nullDevice
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-        } catch {
-            return (-1, "")
-        }
-        let watchdog = DispatchWorkItem { [weak process] in
-            if let process, process.isRunning { process.terminate() }
-        }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
-        let raw = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        watchdog.cancel()
-        return (process.terminationStatus, String(decoding: raw.prefix(4_096), as: UTF8.self))
     }
 }

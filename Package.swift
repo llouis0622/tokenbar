@@ -8,6 +8,7 @@ let package = Package(
         .target(name: "CSensors", linkerSettings: [.linkedFramework("IOKit")]),
         .target(name: "TokenBarCore", dependencies: ["CSensors"]),
         .executableTarget(name: "TokenBar", dependencies: ["TokenBarCore"]),
+        .executableTarget(name: "tokenbar-fan", dependencies: ["CSensors"]),
         .testTarget(name: "TokenBarCoreTests", dependencies: ["TokenBarCore"]),
     ]
 )

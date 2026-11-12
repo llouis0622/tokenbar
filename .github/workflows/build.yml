@@ -41,6 +41,12 @@ jobs:
           codesign -d --verbose=2 TokenBar.app 2>&1 | grep -E "flags|Identifier"
           lipo -archs TokenBar.app/Contents/MacOS/TokenBar
           test -f TokenBar.app/Contents/Resources/AppIcon.icns
+          test -f TokenBar.app/Contents/Resources/fan-helper.sh
+          lipo -archs TokenBar.app/Contents/MacOS/tokenbar-fan
+          test "$(TokenBar.app/Contents/MacOS/tokenbar-fan version)" = "1"
+          TokenBar.app/Contents/MacOS/tokenbar-fan auto all && exit 1 || test $? -eq 77
+          TokenBar.app/Contents/MacOS/tokenbar-fan set 0 "1;id" && exit 1 || test $? -eq 77
+          sh -n Resources/fan-helper.sh
           ditto -c -k --keepParent TokenBar.app TokenBar.zip
           shasum -a 256 TokenBar.zip > TokenBar.zip.sha256
           cat TokenBar.zip.sha256

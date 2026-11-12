@@ -343,4 +343,24 @@ final class TokenBarCoreTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(second.upload, 0)
         XCTAssertGreaterThanOrEqual(second.download, 0)
     }
+
+    func testFanClampingAndHelperArgumentBounds() {
+        let fan = FanInfo(id: 0, actual: 2000, minimum: 1200.4, maximum: 5779.6, target: 0, mode: 0)
+        XCTAssertTrue(fan.isAdjustable)
+        XCTAssertEqual(fan.clamped(100), 1201)
+        XCTAssertEqual(fan.clamped(9000), 5779)
+        XCTAssertEqual(fan.clamped(3000), 3000)
+        XCTAssertFalse(FanInfo(id: 0, actual: 0, minimum: 0, maximum: 0, target: 0, mode: -1).isAdjustable)
+        XCTAssertFalse(FanHelper.setManual(fan: -1, rpm: 2000))
+        XCTAssertFalse(FanHelper.setManual(fan: 0, rpm: 99_999))
+        XCTAssertFalse(FanHelper.setAuto(fan: 42))
+    }
+
+    func testFanReadDoesNotCrashWithoutFans() async {
+        let monitor = SystemMonitor()
+        let sample = await monitor.sample(includeTemperatures: false, includeFans: true)
+        for fan in sample.fans {
+            XCTAssertGreaterThanOrEqual(fan.actual, 0)
+        }
+    }
 }
