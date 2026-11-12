@@ -55,14 +55,14 @@ final class UsageStore: ObservableObject {
                 BarCell(label: "DSK", value: percentText(system?.diskPercent), widest: "100%"),
             ]),
         ]
-        if let speeds = system?.fanSpeeds, !speeds.isEmpty {
-            let symbol = fanTargets.isEmpty ? "fanblades" : "fanblades.fill"
-            columns.append(.icon(symbol: symbol, values: speeds.map { String($0) }, widest: "9999"))
-        }
         columns.append(.cells([
             BarCell(label: "↑", value: Format.rate(system?.upload ?? 0), widest: "999M"),
             BarCell(label: "↓", value: Format.rate(system?.download ?? 0), widest: "999M"),
         ]))
+        if let speeds = system?.fanSpeeds, !speeds.isEmpty {
+            let symbol = fanTargets.isEmpty ? "fanblades" : "fanblades.fill"
+            columns.append(.icon(symbol: symbol, values: speeds.map { String($0) }, widest: "9999"))
+        }
         return columns
     }
 
