@@ -168,11 +168,8 @@ public actor SystemMonitor {
             let service = IOIteratorNext(iterator)
             if service == 0 { break }
             defer { IOObjectRelease(service) }
-            var properties: Unmanaged<CFMutableDictionary>?
-            guard IORegistryEntryCreateCFProperties(service, &properties, kCFAllocatorDefault, 0) == KERN_SUCCESS,
-                  let dictionary = properties?.takeRetainedValue() as? [String: Any],
-                  let statistics = dictionary["PerformanceStatistics"] as? [String: Any]
-            else { continue }
+            let property = IORegistryEntryCreateCFProperty(service, "PerformanceStatistics" as CFString, kCFAllocatorDefault, 0)
+            guard let statistics = property?.takeRetainedValue() as? [String: Any] else { continue }
             let value = (statistics["Device Utilization %"] as? NSNumber) ?? (statistics["GPU Activity(%)"] as? NSNumber)
             if let value {
                 best = max(best ?? 0, value.doubleValue)

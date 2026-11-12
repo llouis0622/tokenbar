@@ -16,17 +16,52 @@ public protocol HTTPClient: Sendable {
     func get(url: URL, headers: [String: String]) async throws -> HTTPResult
 }
 
+final class RedirectBlocker: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
 public struct URLSessionHTTPClient: HTTPClient {
-    public init() {}
+    public static let allowedHosts: Set<String> = ["api.anthropic.com", "chatgpt.com", "raw.githubusercontent.com"]
+    public static let maxResponseBytes = 16 * 1024 * 1024
+
+    private let session: URLSession
+
+    public init() {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.urlCache = nil
+        configuration.urlCredentialStorage = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 20
+        configuration.timeoutIntervalForResource = 45
+        configuration.tlsMinimumSupportedProtocolVersion = .TLSv12
+        configuration.waitsForConnectivity = false
+        session = URLSession(configuration: configuration, delegate: RedirectBlocker(), delegateQueue: nil)
+    }
+
+    public static func isAllowed(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else { return false }
+        return allowedHosts.contains(host) && url.user == nil && url.password == nil
+    }
 
     public func get(url: URL, headers: [String: String]) async throws -> HTTPResult {
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        guard Self.isAllowed(url) else { throw LimitError.badResponse }
+        var request = URLRequest(url: url)
         request.httpMethod = "GET"
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
         }
-        let (body, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
+        let (body, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, body.count <= Self.maxResponseBytes else {
             throw LimitError.badResponse
         }
         let retryAfter = http.value(forHTTPHeaderField: "Retry-After").flatMap { TimeInterval($0) }
@@ -67,6 +102,23 @@ public enum LimitError: Error, Equatable {
         case 401, 403: throw LimitError.unauthorized(provider)
         case 429: throw LimitError.rateLimited(result.retryAfter)
         default: throw LimitError.http(result.status)
+        }
+    }
+}
+
+enum SecureFile {
+    static func prepareDirectory(_ url: URL) {
+        let manager = FileManager.default
+        try? manager.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+    }
+
+    static func write(_ content: Data, to url: URL) {
+        do {
+            try content.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch {
+            return
         }
     }
 }

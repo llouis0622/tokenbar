@@ -90,54 +90,115 @@ final class TokenBarCoreTests: XCTestCase {
         XCTAssertEqual(normalized.windows[1].usedPercent, 30)
     }
 
-    func testClaudeLogScanDeduplicatesAndSplitsCache() throws {
-        let first = """
-        {"type":"user","timestamp":"2026-11-12T01:00:00.000Z","message":{"content":"usage"}}
-        {"type":"assistant","timestamp":"2026-11-12T01:00:01.000Z","requestId":"req_1","message":{"id":"msg_1","model":"claude-opus-4-5-20251101","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":300,"cache_read_input_tokens":1000,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":200}}}}
-        {"type":"assistant","timestamp":"2026-11-12T01:00:02.000Z","requestId":"req_1","message":{"id":"msg_1","model":"claude-opus-4-5-20251101","usage":{"input_tokens":10,"output_tokens":50,"cache_creation_input_tokens":300,"cache_read_input_tokens":1000,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":200}}}}
-        {"type":"assistant","timestamp":"2026-11-12T01:00:03.000Z","message":{"id":"msg_s","model":"<synthetic>","usage":{"input_tokens":1,"output_tokens":1}}}
-        """
-        let second = """
-        {"type":"assistant","timestamp":"2026-11-12T01:00:02.000Z","requestId":"req_1","message":{"id":"msg_1","model":"claude-opus-4-5-20251101","usage":{"input_tokens":10,"output_tokens":50,"cache_creation_input_tokens":300,"cache_read_input_tokens":1000}}}
-        {"type":"assistant","timestamp":"2026-11-12T02:00:00.000Z","requestId":"req_2","message":{"id":"msg_2","model":"claude-haiku-4-5","usage":{"input_tokens":7,"output_tokens":3}}}
-        """
+    private func claudeLine(_ id: String, _ request: String, time: String, model: String = "claude-opus-4-5-20251101", output: Int, detail: Bool = true) -> String {
+        let cache = detail ? #","cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":200}"# : ""
+        return #"{"type":"assistant","timestamp":"\#(time)","requestId":"\#(request)","message":{"id":"\#(id)","model":"\#(model)","usage":{"input_tokens":10,"output_tokens":\#(output),"cache_creation_input_tokens":300,"cache_read_input_tokens":1000\#(cache)}}}"#
+    }
+
+    private func claudeTotals(_ scanner: ClaudeLogScanner, now: Date) -> [String: TokenUsage] {
+        var aggregate = UsageAggregate(now: now)
+        scanner.collect(since: Date(timeIntervalSince1970: 0), into: &aggregate)
+        return aggregate.totals[.month]?[.claude] ?? [:]
+    }
+
+    func testClaudeLogScanDeduplicatesAcrossChunksAndFiles() throws {
+        let now = DateParsing.parse("2026-11-12T03:00:00Z")!
+        let first = [
+            #"{"type":"user","timestamp":"2026-11-12T01:00:00.000Z","message":{"content":"usage"}}"#,
+            claudeLine("msg_1", "req_1", time: "2026-11-12T01:00:01.000Z", output: 5),
+            claudeLine("msg_1", "req_1", time: "2026-11-12T01:00:02.000Z", output: 50),
+            #"{"type":"assistant","timestamp":"2026-11-12T01:00:03.000Z","message":{"id":"msg_s","model":"<synthetic>","usage":{"input_tokens":1,"output_tokens":1}}}"#,
+        ].joined(separator: "\n") + "\n"
+        let second = [
+            claudeLine("msg_1", "req_1", time: "2026-11-12T01:00:02.000Z", output: 50, detail: false),
+            #"{"type":"assistant","timestamp":"2026-11-12T02:00:00.000Z","requestId":"req_2","message":{"id":"msg_2","model":"claude-haiku-4-5","usage":{"input_tokens":7,"output_tokens":3}}}"#,
+        ].joined(separator: "\n") + "\n"
         _ = try write(first, to: ".claude/projects/a/one.jsonl")
         _ = try write(second, to: ".claude/projects/b/two.jsonl")
         let scanner = ClaudeLogScanner(home: temp)
-        let entries = scanner.entries(since: Date(timeIntervalSince1970: 0)).sorted { $0.timestamp < $1.timestamp }
-        XCTAssertEqual(entries.count, 2)
-        XCTAssertEqual(entries[0].usage.output, 50)
-        XCTAssertEqual(entries[0].usage.cacheWrite5m + entries[0].usage.cacheWrite1h, 300)
-        XCTAssertEqual(entries[0].usage.cacheRead, 1000)
-        XCTAssertEqual(entries[1].model, "claude-haiku-4-5")
-        XCTAssertEqual(scanner.entries(since: Date(timeIntervalSince1970: 0)).count, 2)
+        let totals = claudeTotals(scanner, now: now)
+        XCTAssertEqual(totals.count, 2)
+        let opus = try XCTUnwrap(totals["claude-opus-4-5-20251101"])
+        XCTAssertEqual(opus.input, 10)
+        XCTAssertEqual(opus.output, 50)
+        XCTAssertEqual(opus.cacheWrite5m + opus.cacheWrite1h, 300)
+        XCTAssertEqual(opus.cacheRead, 1000)
+        XCTAssertEqual(totals["claude-haiku-4-5"], TokenUsage(input: 7, output: 3))
+        XCTAssertEqual(scanner.cachedRecordCount, 3)
+        XCTAssertEqual(claudeTotals(scanner, now: now), totals)
+    }
 
-        let single = ClaudeLogScanner.parse(temp.appendingPathComponent(".claude/projects/a/one.jsonl"))
-        XCTAssertEqual(single.last?.entry.usage.cacheWrite5m, 100)
-        XCTAssertEqual(single.last?.entry.usage.cacheWrite1h, 200)
+    func testClaudeLogScanReadsOnlyAppendedLines() throws {
+        let now = DateParsing.parse("2026-11-12T03:00:00Z")!
+        let url = try write(claudeLine("msg_1", "req_1", time: "2026-11-12T01:00:01.000Z", output: 5) + "\n", to: ".claude/projects/a/one.jsonl")
+        let scanner = ClaudeLogScanner(home: temp)
+        XCTAssertEqual(claudeTotals(scanner, now: now)["claude-opus-4-5-20251101"]?.output, 5)
+
+        let partial = claudeLine("msg_2", "req_2", time: "2026-11-12T01:10:00.000Z", output: 7)
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(partial.prefix(40).utf8))
+        try handle.close()
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: url.path)
+        XCTAssertEqual(claudeTotals(scanner, now: now)["claude-opus-4-5-20251101"]?.output, 5)
+
+        let rest = try FileHandle(forWritingTo: url)
+        try rest.seekToEnd()
+        try rest.write(contentsOf: Data((String(partial.dropFirst(40)) + "\n").utf8))
+        try rest.close()
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(10)], ofItemAtPath: url.path)
+        XCTAssertEqual(claudeTotals(scanner, now: now)["claude-opus-4-5-20251101"]?.output, 12)
+        XCTAssertEqual(scanner.cachedRecordCount, 2)
     }
 
     func testCodexLogScanUsesTotalsAndSkipsDuplicates() throws {
+        let now = DateParsing.parse("2026-11-12T03:00:00Z")!
         let log = """
         {"timestamp":"2026-11-12T01:00:00.000Z","type":"turn_context","payload":{"model":"gpt-5-codex"}}
         {"timestamp":"2026-11-12T01:00:01.000Z","type":"event_msg","payload":{"type":"token_count","info":null}}
         {"timestamp":"2026-11-12T01:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":100},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":100}},"rate_limits":{"primary":{"used_percent":12.5,"window_minutes":300,"resets_at":1794445200},"secondary":{"used_percent":40,"window_minutes":10080,"resets_in_seconds":3600}}}}
         {"timestamp":"2026-11-12T01:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":100},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":100}}}}
         {"timestamp":"2026-11-12T01:00:04.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":3000,"cached_input_tokens":1400,"output_tokens":350},"last_token_usage":{"input_tokens":2000,"cached_input_tokens":1000,"output_tokens":250}}}}
-        """
-        let url = try write(log, to: ".codex/sessions/2026/11/12/rollout.jsonl")
-        let entries = CodexLogScanner.parse(url)
-        XCTAssertEqual(entries.count, 2)
-        XCTAssertEqual(entries[0].model, "gpt-5-codex")
-        XCTAssertEqual(entries[0].usage, TokenUsage(input: 600, output: 100, cacheRead: 400))
-        XCTAssertEqual(entries[1].usage, TokenUsage(input: 1000, output: 250, cacheRead: 1000))
 
+        """
+        _ = try write(log, to: ".codex/sessions/2026/11/12/rollout.jsonl")
         let scanner = CodexLogScanner(codexHome: temp.appendingPathComponent(".codex"))
+        var aggregate = UsageAggregate(now: now)
+        scanner.collect(since: Date(timeIntervalSince1970: 0), into: &aggregate)
+        XCTAssertEqual(aggregate.totals[.month]?[.codex], ["gpt-5-codex": TokenUsage(input: 1600, output: 350, cacheRead: 1400)])
+
         let limits = scanner.latestRateLimits(now: Date())
         XCTAssertEqual(limits?.source, .localLog)
         XCTAssertEqual(limits?.windows.map(\.label), ["5시간", "주간"])
         XCTAssertEqual(limits?.windows.first?.usedPercent, 12.5)
         XCTAssertEqual(limits?.windows.last?.resetsAt, DateParsing.parse("2026-11-12T02:00:02Z"))
+    }
+
+    func testNetworkAllowList() {
+        XCTAssertTrue(URLSessionHTTPClient.isAllowed(URL(string: "https://api.anthropic.com/api/oauth/usage")!))
+        XCTAssertTrue(URLSessionHTTPClient.isAllowed(URL(string: "https://chatgpt.com/backend-api/wham/usage")!))
+        XCTAssertFalse(URLSessionHTTPClient.isAllowed(URL(string: "http://api.anthropic.com/api/oauth/usage")!))
+        XCTAssertFalse(URLSessionHTTPClient.isAllowed(URL(string: "https://api.anthropic.com.evil.example/usage")!))
+        XCTAssertFalse(URLSessionHTTPClient.isAllowed(URL(string: "https://user:pw@chatgpt.com/")!))
+        XCTAssertFalse(URLSessionHTTPClient.isAllowed(URL(string: "https://example.com/")!))
+    }
+
+    func testUpdaterTrustsOnlyOwnRepository() async {
+        XCTAssertTrue(Updater.isTrusted(remote: "https://github.com/llouis0622/tokenbar.git\n"))
+        XCTAssertTrue(Updater.isTrusted(remote: "git@github.com:llouis0622/tokenbar.git"))
+        XCTAssertTrue(Updater.isTrusted(remote: "https://github.com/LLouis0622/TokenBar/"))
+        XCTAssertFalse(Updater.isTrusted(remote: "https://github.com/someone/tokenbar.git"))
+        XCTAssertFalse(Updater.isTrusted(remote: "https://github.com/llouis0622/tokenbar.evil.example/x"))
+        XCTAssertTrue(Updater.isCommit(String(repeating: "a1", count: 20)))
+        XCTAssertFalse(Updater.isCommit("unknown"))
+        XCTAssertFalse(Updater.isCommit("main; rm -rf ~"))
+
+        let log = temp.appendingPathComponent("update.log")
+        let missing = Updater(sourceDir: nil, installedCommit: nil, logFile: log)
+        if case .unavailable = await missing.check() {} else { XCTFail("expected unavailable") }
+        let foreign = Updater(sourceDir: temp.path, installedCommit: nil, logFile: log)
+        if case .unavailable = await foreign.apply() {} else { XCTFail("expected unavailable") }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: log.path))
     }
 
     func testPricingLookupAndCost() {

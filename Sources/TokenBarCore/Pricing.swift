@@ -65,8 +65,11 @@ public struct PriceTable: Equatable, Sendable {
                   let provider = item["litellm_provider"] as? String,
                   provider == "anthropic" || provider == "openai",
                   let input = item.double("input_cost_per_token"),
-                  let output = item.double("output_cost_per_token")
+                  let output = item.double("output_cost_per_token"),
+                  input.isFinite, output.isFinite, input >= 0, output >= 0, input < 0.01, output < 0.01
             else { continue }
+            let name = key.lowercased()
+            guard name.contains("claude") || name.contains("gpt") || name.contains("codex") else { continue }
             let million = 1_000_000.0
             prices[key.lowercased()] = ModelPrice(
                 input: input * million,
@@ -115,7 +118,7 @@ actor PriceStore {
                     remotePrices = parsed
                     fetchedAt = now
                     if let encoded = try? JSONEncoder().encode(PriceCacheFile(fetchedAt: now, prices: parsed)) {
-                        try? encoded.write(to: cacheFile, options: .atomic)
+                        SecureFile.write(encoded, to: cacheFile)
                     }
                 }
             }

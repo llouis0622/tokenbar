@@ -66,20 +66,12 @@ public struct ClaudeLimitFetcher: Sendable {
     ]
 
     let client: HTTPClient
-    let home: URL
 
-    public init(client: HTTPClient, home: URL) {
+    public init(client: HTTPClient) {
         self.client = client
-        self.home = home
     }
 
-    public func fetch(now: Date = Date()) async throws -> LimitSnapshot {
-        guard let credentials = ClaudeCredentialStore.load(home: home) else {
-            throw LimitError.noCredentials(.claude)
-        }
-        if let expiresAt = credentials.expiresAt, expiresAt <= now {
-            throw LimitError.tokenExpired(.claude)
-        }
+    public func fetch(using credentials: ClaudeCredentials, now: Date = Date()) async throws -> LimitSnapshot {
         let result = try await client.get(url: Self.endpoint, headers: [
             "Authorization": "Bearer \(credentials.accessToken)",
             "anthropic-beta": "oauth-2025-04-20",

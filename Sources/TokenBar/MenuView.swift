@@ -19,20 +19,11 @@ struct MenuView: View {
         }
         .padding(16)
         .frame(width: 320)
-        .onAppear {
-            store.menuVisible = true
-            Task { await store.sampleSystem() }
-        }
-        .onDisappear {
-            store.menuVisible = false
-        }
-        .task {
-            await store.refresh()
-        }
     }
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 10) {
+            UpdateRow(state: store.update, version: store.version)
             Toggle("로그인 시 자동 실행", isOn: Binding(
                 get: { store.launchAtLogin },
                 set: { store.setLaunchAtLogin($0) }
@@ -45,7 +36,7 @@ struct MenuView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("새로고침") {
-                    Task { await store.refresh() }
+                    Task { await store.refreshAll() }
                 }
                 .disabled(store.isRefreshing)
                 Button("종료") {
@@ -60,6 +51,71 @@ struct MenuView: View {
         if store.isRefreshing { return "갱신 중…" }
         if let last = store.lastRefresh { return "갱신 \(Format.ago(last))" }
         return ""
+    }
+}
+
+struct UpdateRow: View {
+    @EnvironmentObject private var store: UsageStore
+    let state: UpdateState
+    let version: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if canApply {
+                    Button("업데이트") {
+                        Task { await store.applyUpdate() }
+                    }
+                } else if canCheck {
+                    Button("업데이트 확인") {
+                        Task { await store.checkForUpdate(force: true) }
+                    }
+                }
+            }
+            .controlSize(.small)
+            if let detail {
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var title: String {
+        switch state {
+        case .available(let count): return "\(version) · 새 변경 \(count)건"
+        case .upToDate: return "\(version) · 최신"
+        case .checking: return "\(version) · 확인 중…"
+        case .updating: return "\(version) · 업데이트 중…"
+        default: return version
+        }
+    }
+
+    private var detail: String? {
+        switch state {
+        case .updating: return "빌드에 1분 정도 걸리고, 끝나면 자동으로 다시 시작됩니다."
+        case .unavailable(let message), .failed(let message): return message
+        default: return nil
+        }
+    }
+
+    private var canApply: Bool {
+        switch state {
+        case .available, .failed: return true
+        default: return false
+        }
+    }
+
+    private var canCheck: Bool {
+        switch state {
+        case .unknown, .upToDate, .unavailable: return true
+        default: return false
+        }
     }
 }
 

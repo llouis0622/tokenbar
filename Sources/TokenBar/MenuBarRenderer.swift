@@ -1,6 +1,6 @@
 import AppKit
 
-struct BarCell {
+struct BarCell: Equatable {
     let label: String
     let value: String
     let widest: String

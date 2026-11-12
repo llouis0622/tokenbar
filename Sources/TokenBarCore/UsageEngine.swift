@@ -1,30 +1,52 @@
 import Foundation
 
+public struct UsageAggregate {
+    let starts: [(period: Period, start: Date)]
+    var totals: [Period: [Provider: [String: TokenUsage]]] = [:]
+
+    public init(now: Date, calendar: Calendar = .current) {
+        starts = Period.allCases.map { ($0, $0.start(now: now, calendar: calendar)) }
+    }
+
+    public mutating func add(provider: Provider, model: String, timestamp: Date, usage: TokenUsage) {
+        for item in starts where timestamp >= item.start {
+            var current = totals[item.period]?[provider]?[model] ?? TokenUsage()
+            current.input += usage.input
+            current.output += usage.output
+            current.cacheWrite5m += usage.cacheWrite5m
+            current.cacheWrite1h += usage.cacheWrite1h
+            current.cacheRead += usage.cacheRead
+            totals[item.period, default: [:]][provider, default: [:]][model] = current
+        }
+    }
+}
+
 public enum CostCalculator {
-    public static func report(entries: [UsageEntry], prices: PriceTable, now: Date, calendar: Calendar = .current) -> CostReport {
+    public static func report(aggregate: UsageAggregate, prices: PriceTable, now: Date) -> CostReport {
         var byPeriod: [Period: [Provider: CostSummary]] = [:]
-        var memo: [String: ModelPrice?] = [:]
-        let starts = Period.allCases.map { ($0, $0.start(now: now, calendar: calendar)) }
-        for entry in entries {
-            let price: ModelPrice?
-            if let known = memo[entry.model] {
-                price = known
-            } else {
-                price = prices.price(for: entry.model)
-                memo.updateValue(price, forKey: entry.model)
-            }
-            for (period, start) in starts where entry.timestamp >= start {
-                var summary = byPeriod[period]?[entry.provider] ?? CostSummary()
-                summary.tokens += entry.usage.total
-                if let price {
-                    summary.cost += price.cost(entry.usage)
-                } else {
-                    summary.unpricedTokens += entry.usage.total
+        for (period, providers) in aggregate.totals {
+            for (provider, models) in providers {
+                var summary = CostSummary()
+                for (model, usage) in models {
+                    summary.tokens += usage.total
+                    if let price = prices.price(for: model) {
+                        summary.cost += price.cost(usage)
+                    } else {
+                        summary.unpricedTokens += usage.total
+                    }
                 }
-                byPeriod[period, default: [:]][entry.provider] = summary
+                byPeriod[period, default: [:]][provider] = summary
             }
         }
         return CostReport(byPeriod: byPeriod, generatedAt: now)
+    }
+
+    public static func report(entries: [UsageEntry], prices: PriceTable, now: Date, calendar: Calendar = .current) -> CostReport {
+        var aggregate = UsageAggregate(now: now, calendar: calendar)
+        for entry in entries {
+            aggregate.add(provider: entry.provider, model: entry.model, timestamp: entry.timestamp, usage: entry.usage)
+        }
+        return report(aggregate: aggregate, prices: prices, now: now)
     }
 }
 
@@ -35,6 +57,8 @@ public actor UsageEngine {
     private let codexLogs: CodexLogScanner
     private let prices: PriceStore
     private let limitsFile: URL
+    private let home: URL
+    private var claudeCredentials: ClaudeCredentials?
     private var lastGood: [Provider: LimitSnapshot]
     private var lastError: [Provider: String] = [:]
     private var nextAllowed: [Provider: Date] = [:]
@@ -45,9 +69,10 @@ public actor UsageEngine {
         client: HTTPClient = URLSessionHTTPClient()
     ) {
         let support = supportDir ?? home.appendingPathComponent("Library/Application Support/TokenBar")
-        try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        SecureFile.prepareDirectory(support)
         let codexHome = CodexPaths.home(userHome: home)
-        self.claude = ClaudeLimitFetcher(client: client, home: home)
+        self.home = home
+        self.claude = ClaudeLimitFetcher(client: client)
         self.codex = CodexLimitFetcher(client: client, codexHome: codexHome)
         self.claudeLogs = ClaudeLogScanner(home: home)
         self.codexLogs = CodexLogScanner(codexHome: codexHome)
@@ -71,6 +96,21 @@ public actor UsageEngine {
         return results
     }
 
+    private func currentClaudeCredentials(now: Date) throws -> ClaudeCredentials {
+        if let cached = claudeCredentials, let expiresAt = cached.expiresAt, expiresAt > now.addingTimeInterval(60) {
+            return cached
+        }
+        claudeCredentials = nil
+        guard let loaded = ClaudeCredentialStore.load(home: home) else {
+            throw LimitError.noCredentials(.claude)
+        }
+        if let expiresAt = loaded.expiresAt, expiresAt <= now {
+            throw LimitError.tokenExpired(.claude)
+        }
+        claudeCredentials = loaded
+        return loaded
+    }
+
     private func limit(for provider: Provider, now: Date) async -> LimitResult {
         if let next = nextAllowed[provider], now < next {
             return cached(provider, now: now)
@@ -78,7 +118,7 @@ public actor UsageEngine {
         do {
             let snapshot: LimitSnapshot
             switch provider {
-            case .claude: snapshot = try await claude.fetch(now: now)
+            case .claude: snapshot = try await claude.fetch(using: currentClaudeCredentials(now: now), now: now)
             case .codex: snapshot = try await codex.fetch(now: now)
             }
             lastGood[provider] = snapshot
@@ -91,7 +131,10 @@ public actor UsageEngine {
             if let known = error as? LimitError {
                 lastError[provider] = known.message
                 if case .rateLimited(let retryAfter) = known {
-                    wait = max(retryAfter ?? 0, 300)
+                    wait = min(max(retryAfter ?? 0, 300), 3_600)
+                }
+                if case .unauthorized(.claude) = known {
+                    claudeCredentials = nil
                 }
             } else {
                 lastError[provider] = "네트워크 연결을 확인하세요."
@@ -119,14 +162,16 @@ public actor UsageEngine {
 
     private func persist() {
         if let encoded = try? JSONEncoder().encode(Array(lastGood.values)) {
-            try? encoded.write(to: limitsFile, options: .atomic)
+            SecureFile.write(encoded, to: limitsFile)
         }
     }
 
     public func costs(now: Date = Date()) async -> CostReport {
         let cutoff = Period.month.start(now: now)
-        let entries = claudeLogs.entries(since: cutoff) + codexLogs.entries(since: cutoff)
+        var aggregate = UsageAggregate(now: now)
+        claudeLogs.collect(since: cutoff, into: &aggregate)
+        codexLogs.collect(since: cutoff, into: &aggregate)
         let table = await prices.table(now: now)
-        return CostCalculator.report(entries: entries, prices: table, now: now)
+        return CostCalculator.report(aggregate: aggregate, prices: table, now: now)
     }
 }

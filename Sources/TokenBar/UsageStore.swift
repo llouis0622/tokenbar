@@ -7,39 +7,41 @@ import TokenBarCore
 final class UsageStore: ObservableObject {
     @Published private(set) var limits: [Provider: LimitResult] = [:]
     @Published private(set) var costs: CostReport?
+    @Published private(set) var system: SystemSample?
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastRefresh: Date?
+    @Published private(set) var update: UpdateState = .unknown
     @Published private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled
 
-    @Published private(set) var system: SystemSample?
-    var menuVisible = false
+    var onChange: (() -> Void)?
 
+    let version: String
     private let engine = UsageEngine()
     private let monitor = SystemMonitor()
-    private var loop: Task<Void, Never>?
-    private var systemLoop: Task<Void, Never>?
+    private let updater: Updater
+    private var menuVisible = false
+    private var lastUpdateCheck: Date?
+    private var lastCostRefresh: Date?
+    private var refreshingCosts = false
 
     init() {
-        loop = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.refresh()
-                try? await Task.sleep(nanoseconds: 300 * 1_000_000_000)
-            }
-        }
-        systemLoop = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.sampleSystem()
-                try? await Task.sleep(nanoseconds: 2 * 1_000_000_000)
-            }
-        }
+        let info = Bundle.main.infoDictionary ?? [:]
+        let commit = info["TBCommit"] as? String
+        let source = info["TBSourceDir"] as? String
+        let number = info["CFBundleShortVersionString"] as? String ?? "dev"
+        let short = Updater.isCommit(commit) ? " (\(commit!.prefix(7)))" : ""
+        version = "v\(number)\(short)"
+        let support = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/TokenBar")
+        updater = Updater(
+            sourceDir: (source?.isEmpty ?? true) ? nil : source,
+            installedCommit: commit,
+            logFile: support.appendingPathComponent("update.log")
+        )
     }
 
-    func sampleSystem() async {
-        system = await monitor.sample(includeTemperatures: menuVisible)
-    }
-
-    var barImage: NSImage {
-        MenuBarRenderer.image(columns: [
+    var barCells: [[BarCell]] {
+        [
             [
                 BarCell(label: "C", value: limitText(.claude), widest: "100%"),
                 BarCell(label: "G", value: limitText(.codex), widest: "100%"),
@@ -56,7 +58,7 @@ final class UsageStore: ObservableObject {
                 BarCell(label: "↑", value: Format.rate(system?.upload ?? 0), widest: "999M"),
                 BarCell(label: "↓", value: Format.rate(system?.download ?? 0), widest: "999M"),
             ],
-        ])
+        ]
     }
 
     private func limitText(_ provider: Provider) -> String {
@@ -67,22 +69,71 @@ final class UsageStore: ObservableObject {
         value.map { Format.percent($0) } ?? "–"
     }
 
-    var menuTitle: String {
-        Provider.allCases.map { provider in
-            if let window = limits[provider]?.snapshot?.primary {
-                return "\(provider.short) \(Format.percent(window.usedPercent))"
-            }
-            return "\(provider.short) –"
-        }.joined(separator: " · ")
+    func menuOpened() {
+        menuVisible = true
+        Task {
+            await sampleSystem()
+            await refreshLimits()
+            await refreshCosts(force: false)
+            await checkForUpdate(force: false)
+        }
     }
 
-    func refresh() async {
+    func menuClosed() {
+        menuVisible = false
+    }
+
+    func sampleSystem() async {
+        let sample = await monitor.sample(includeTemperatures: menuVisible)
+        guard sample != system else { return }
+        system = sample
+        onChange?()
+    }
+
+    func refreshLimits() async {
         guard !isRefreshing else { return }
         isRefreshing = true
         limits = await engine.limits()
         lastRefresh = Date()
-        costs = await engine.costs()
         isRefreshing = false
+        onChange?()
+    }
+
+    func refreshCosts(force: Bool) async {
+        guard !refreshingCosts else { return }
+        if !force, let last = lastCostRefresh, Date().timeIntervalSince(last) < 60 { return }
+        refreshingCosts = true
+        let engine = self.engine
+        costs = await Task.detached(priority: .utility) {
+            await engine.costs()
+        }.value
+        lastCostRefresh = Date()
+        refreshingCosts = false
+    }
+
+    func refreshAll() async {
+        await refreshLimits()
+        await refreshCosts(force: true)
+    }
+
+    func checkForUpdate(force: Bool) async {
+        if case .updating = update { return }
+        if !force, let last = lastUpdateCheck, Date().timeIntervalSince(last) < 6 * 3_600 { return }
+        lastUpdateCheck = Date()
+        if force { update = .checking }
+        let updater = self.updater
+        update = await Task.detached(priority: .utility) {
+            await updater.check()
+        }.value
+    }
+
+    func applyUpdate() async {
+        update = await updater.apply()
+        guard case .updating = update else { return }
+        while case .updating = update {
+            try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)
+            update = await updater.check()
+        }
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -93,7 +144,8 @@ final class UsageStore: ObservableObject {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
-            NSLog("TokenBar launch-at-login: %@", error.localizedDescription)
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+            return
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }
