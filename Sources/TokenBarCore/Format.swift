@@ -55,10 +55,6 @@ public enum Format {
         return value >= 100 ? String(format: "%.0fGB", value) : String(format: "%.1fGB", value)
     }
 
-    public static func memory(_ bytes: UInt64) -> String {
-        String(format: "%.1fGB", Double(bytes) / 1_073_741_824)
-    }
-
     public static func degrees(_ value: Double) -> String {
         "\(Int(value.rounded()))°"
     }

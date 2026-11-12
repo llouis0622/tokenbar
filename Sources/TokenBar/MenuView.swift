@@ -6,10 +6,12 @@ struct MenuView: View {
     @EnvironmentObject private var store: UsageStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(Provider.allCases, id: \.self) { provider in
                 ProviderSection(provider: provider, result: store.limits[provider])
             }
+            Divider()
+            CostSection(report: store.costs)
             Divider()
             SystemSection(sample: store.system)
             if let fans = store.system?.fans, !fans.isEmpty {
@@ -17,29 +19,24 @@ struct MenuView: View {
                 FanSection(fans: fans)
             }
             Divider()
-            CostSection(report: store.costs)
-            Divider()
-            footer
+            settings
         }
-        .padding(16)
+        .padding(14)
         .frame(width: 320)
     }
 
-    private var footer: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private var settings: some View {
+        VStack(alignment: .leading, spacing: 8) {
             UpdateRow(state: store.update, version: store.version)
-            Toggle("로그인 시 자동 실행", isOn: Binding(
-                get: { store.launchAtLogin },
-                set: { store.setLaunchAtLogin($0) }
-            ))
-            .toggleStyle(.switch)
-            .controlSize(.small)
             HStack {
-                Text(statusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Toggle("로그인 시 자동 실행", isOn: Binding(
+                    get: { store.launchAtLogin },
+                    set: { store.setLaunchAtLogin($0) }
+                ))
+                .toggleStyle(.switch)
+                .font(.callout)
                 Spacer()
-                Button("새로고침") {
+                Button(store.isRefreshing ? "갱신 중…" : "새로고침") {
                     Task { await store.refreshAll() }
                 }
                 .disabled(store.isRefreshing)
@@ -50,12 +47,6 @@ struct MenuView: View {
             }
             .controlSize(.small)
         }
-    }
-
-    private var statusText: String {
-        if store.isRefreshing { return "갱신 중…" }
-        if let last = store.lastRefresh { return "갱신 \(Format.ago(last))" }
-        return ""
     }
 }
 
@@ -130,7 +121,7 @@ struct ProviderSection: View {
     let result: LimitResult?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(provider.displayName)
                     .font(.headline)
@@ -175,20 +166,20 @@ struct WindowRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(window.label)
                     .font(.callout)
+                if let resetsAt = window.resetsAt {
+                    Text(Format.countdown(to: resetsAt))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Text(Format.percent(window.usedPercent))
                     .font(.callout.monospacedDigit())
                     .fontWeight(.semibold)
             }
             UsageBar(fraction: min(max(window.usedPercent, 0), 100) / 100)
-            if let resetsAt = window.resetsAt {
-                Text(Format.countdown(to: resetsAt))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
     }
 }
@@ -220,11 +211,11 @@ struct CostSection: View {
     let report: CostReport?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("API 환산 비용")
                 .font(.headline)
             if let report {
-                Grid(alignment: .trailing, horizontalSpacing: 14, verticalSpacing: 6) {
+                Grid(alignment: .trailing, horizontalSpacing: 14, verticalSpacing: 4) {
                     GridRow {
                         Text("")
                             .gridColumnAlignment(.leading)
@@ -281,17 +272,19 @@ struct SystemSection: View {
     let sample: SystemSample?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("시스템")
                 .font(.headline)
             if let sample {
-                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
-                    row("CPU", percent(sample.cpu), sample.cpuTemperature.map { Format.degrees($0) } ?? "")
-                    row("GPU", percent(sample.gpu), sample.gpuTemperature.map { Format.degrees($0) } ?? "")
-                    row("메모리", percent(sample.memoryPercent), "\(Format.memory(sample.memoryUsed)) / \(Format.memory(sample.memoryTotal))")
-                    row("디스크", percent(sample.diskPercent), sample.diskFree.map { "\(Format.gigabytes(Double($0))) 남음" } ?? "")
-                    row("네트워크", "↑ \(Format.rate(sample.upload))", "↓ \(Format.rate(sample.download))")
+                HStack(spacing: 12) {
+                    metric("CPU", percent(sample.cpu), sample.cpuTemperature.map { Format.degrees($0) } ?? "")
+                    metric("GPU", percent(sample.gpu), sample.gpuTemperature.map { Format.degrees($0) } ?? "")
                 }
+                HStack(spacing: 12) {
+                    metric("메모리", percent(sample.memoryPercent), memoryText(sample))
+                    metric("디스크", percent(sample.diskPercent), sample.diskFree.map { "\(Format.gigabytes(Double($0))) 남음" } ?? "")
+                }
+                metric("네트워크", "↑ \(Format.rate(sample.upload))", "↓ \(Format.rate(sample.download))")
             } else {
                 Text("측정 중…")
                     .font(.caption)
@@ -304,18 +297,25 @@ struct SystemSection: View {
         value.map { Format.percent($0) } ?? "–"
     }
 
-    private func row(_ label: String, _ value: String, _ detail: String) -> some View {
-        GridRow {
+    private func memoryText(_ sample: SystemSample) -> String {
+        let unit = 1_073_741_824.0
+        return String(format: "%.1f/%.0fGB", Double(sample.memoryUsed) / unit, Double(sample.memoryTotal) / unit)
+    }
+
+    private func metric(_ label: String, _ value: String, _ detail: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(label)
                 .font(.callout)
+                .frame(width: 46, alignment: .leading)
             Text(value)
                 .font(.callout.monospacedDigit())
                 .fontWeight(.semibold)
-                .gridColumnAlignment(.trailing)
             Text(detail)
-                .font(.callout.monospacedDigit())
+                .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -353,7 +353,7 @@ struct FanSection: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if !store.fanHelperReady {
-                Text("제어를 켜면 관리자 암호를 한 번 묻고, 팬 속도만 바꾸는 작은 헬퍼를 설치합니다.")
+                Text("제어를 켜면 관리자 암호를 한 번 묻습니다.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
