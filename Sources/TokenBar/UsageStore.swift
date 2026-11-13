@@ -91,14 +91,15 @@ final class UsageStore: ObservableObject {
 
     func sampleSystem() async {
         let guarding = !fanTargets.isEmpty
-        let sample = await monitor.sample(includeTemperatures: menuVisible || guarding, includeFans: menuVisible)
+        let sample = await monitor.sample(includeTemperatures: menuVisible || guarding, includeFans: menuVisible || guarding)
         if guarding {
-            if let temperature = sample.cpuTemperature {
-                if temperature >= FanHelper.safetyTemperature {
-                    await releaseFans(notice: "CPU 온도가 \(Int(FanHelper.safetyTemperature))°를 넘어 팬을 자동 모드로 되돌렸습니다.")
+            if let temperature = sample.cpuTemperature, temperature >= FanHelper.safetyTemperature {
+                await releaseFans(notice: "CPU 온도가 \(Int(FanHelper.safetyTemperature))°를 넘어 팬을 자동 모드로 되돌렸습니다.")
+            } else {
+                if sample.cpuTemperature == nil, fanNotice == nil {
+                    fanNotice = "온도를 읽지 못해 과열 시 자동 복귀가 동작하지 않습니다."
                 }
-            } else if fanNotice == nil {
-                fanNotice = "온도를 읽지 못해 과열 시 자동 복귀가 동작하지 않습니다."
+                restoreDriftedFans(sample.fans)
             }
         }
         guard sample != system else { return }
@@ -107,6 +108,9 @@ final class UsageStore: ObservableObject {
     }
 
     private static let fanTargetsKey = "fanTargets"
+    private static let fanRestoreNotice = "고정 속도를 다시 적용하지 못했습니다. 고정을 한 번 껐다 켜 주세요."
+    private var lastFanReapply = Date.distantPast
+    private var fanReapplyFailures = 0
 
     private func saveFanTargets() {
         var stored: [String: Int] = [:]
@@ -158,21 +162,51 @@ final class UsageStore: ObservableObject {
             if succeeded { fanTargets[index] = nil }
         }
         fanNotice = succeeded ? nil : "팬 설정을 적용하지 못했습니다. 이 Mac에서는 지원되지 않을 수 있습니다."
+        fanReapplyFailures = 0
+        lastFanReapply = Date()
         saveFanTargets()
         fanBusy = false
         await sampleSystem()
+    }
+
+    private func restoreDriftedFans(_ fans: [FanInfo]) {
+        guard fanHelperReady, !fanBusy, fanReapplyFailures < 5 else { return }
+        let drifted = fanTargets.contains { index, rpm in
+            guard let fan = fans.first(where: { $0.id == index }) else { return false }
+            if fan.mode != 1 { return true }
+            return fan.target > 0 && abs(fan.target - Double(fan.clamped(rpm))) > 60
+        }
+        guard drifted, Date().timeIntervalSince(lastFanReapply) > 12 else { return }
+        Task { await reapplyFans() }
+    }
+
+    func resumeFans() async {
+        fanReapplyFailures = 0
+        try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)
+        await reapplyFans()
     }
 
     func reapplyFans() async {
         await refreshFanHelper()
         guard fanHelperReady, !fanTargets.isEmpty, !fanBusy else { return }
         fanBusy = true
+        lastFanReapply = Date()
         let targets = fanTargets
-        await Task.detached(priority: .utility) {
+        let succeeded = await Task.detached(priority: .utility) {
+            var allApplied = true
             for (index, rpm) in targets {
-                _ = FanHelper.setManual(fan: index, rpm: rpm)
+                if !FanHelper.setManual(fan: index, rpm: rpm) { allApplied = false }
             }
+            return allApplied
         }.value
+        if succeeded {
+            fanReapplyFailures = 0
+            if fanNotice == Self.fanRestoreNotice { fanNotice = nil }
+        } else {
+            fanReapplyFailures += 1
+            if fanReapplyFailures >= 5 { fanNotice = Self.fanRestoreNotice }
+        }
+        lastFanReapply = Date()
         fanBusy = false
     }
 

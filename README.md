@@ -63,7 +63,8 @@ curl -fsSL https://raw.githubusercontent.com/llouis0622/tokenbar/main/install.sh
 - 팬마다 "자동" 또는 "고정" 선택. 고정값은 슬라이더나 숫자 입력으로 지정하며 하드웨어 최소~최대 RPM 안으로만 적용
 - 처음 "제어 켜기"를 누를 때 관리자 암호를 한 번 입력. 팬 속도만 바꾸는 작은 root 헬퍼(`/Library/PrivilegedHelperTools/io.github.llouis0622.tokenbar.fan`)와 그 헬퍼만 암호 없이 실행하게 하는 sudoers 규칙(`/etc/sudoers.d/tokenbar-fan`)이 설치됨
 - 헬퍼가 받는 명령은 `auto`, `set <팬> <RPM>` 두 가지뿐
-- 고정 중 CPU 온도가 90°C를 넘으면 자동 모드로 복귀. 앱을 "종료" 버튼으로 끌 때도 자동으로 복귀하고, 잠자기에서 깨어나면 고정값을 다시 적용
+- 고정 중 CPU 온도가 90°C를 넘으면 자동 모드로 복귀. 앱을 "종료" 버튼으로 끌 때도 자동으로 복귀
+- 화면이 켜지거나 잠금이 풀리거나 잠자기에서 깨어나면 고정값을 다시 적용. 사용 중에도 5초마다 확인해 시스템이 되돌려 놓았으면 다시 맞춤
 - "제어 끄기"를 누르면 헬퍼와 규칙을 모두 삭제
 - Apple Silicon 전용. 팬이 없는 모델에서는 표시되지 않음
 

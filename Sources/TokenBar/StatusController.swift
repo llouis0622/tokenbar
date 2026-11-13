@@ -35,6 +35,14 @@ final class StatusController: NSObject, NSPopoverDelegate {
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(self, selector: #selector(screensDidSleep), name: NSWorkspace.screensDidSleepNotification, object: nil)
         center.addObserver(self, selector: #selector(screensDidWake), name: NSWorkspace.screensDidWakeNotification, object: nil)
+        center.addObserver(self, selector: #selector(sessionResumed), name: NSWorkspace.didWakeNotification, object: nil)
+        center.addObserver(self, selector: #selector(sessionResumed), name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(sessionResumed),
+            name: Notification.Name("com.apple.screenIsUnlocked"),
+            object: nil
+        )
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(powerStateChanged),
@@ -135,8 +143,13 @@ final class StatusController: NSObject, NSPopoverDelegate {
         Task {
             await store.sampleSystem()
             await store.refreshLimits()
-            try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)
-            await store.reapplyFans()
+            await store.resumeFans()
+        }
+    }
+
+    @objc private nonisolated func sessionResumed() {
+        Task { @MainActor in
+            await self.store.resumeFans()
         }
     }
 
