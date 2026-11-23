@@ -91,83 +91,16 @@ final class TokenBarCoreTests: XCTestCase {
         XCTAssertEqual(normalized.windows[1].usedPercent, 30)
     }
 
-    private func claudeLine(_ id: String, _ request: String, time: String, model: String = "claude-opus-4-5-20251101", output: Int, detail: Bool = true) -> String {
-        let cache = detail ? #","cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":200}"# : ""
-        return #"{"type":"assistant","timestamp":"\#(time)","requestId":"\#(request)","message":{"id":"\#(id)","model":"\#(model)","usage":{"input_tokens":10,"output_tokens":\#(output),"cache_creation_input_tokens":300,"cache_read_input_tokens":1000\#(cache)}}}"#
-    }
-
-    private func claudeTotals(_ scanner: ClaudeLogScanner, now: Date) -> [String: TokenUsage] {
-        var aggregate = UsageAggregate(now: now)
-        scanner.collect(since: Date(timeIntervalSince1970: 0), into: &aggregate)
-        return aggregate.totals[.month]?[.claude] ?? [:]
-    }
-
-    func testClaudeLogScanDeduplicatesAcrossChunksAndFiles() throws {
-        let now = DateParsing.parse("2026-11-12T03:00:00Z")!
-        let first = [
-            #"{"type":"user","timestamp":"2026-11-12T01:00:00.000Z","message":{"content":"usage"}}"#,
-            claudeLine("msg_1", "req_1", time: "2026-11-12T01:00:01.000Z", output: 5),
-            claudeLine("msg_1", "req_1", time: "2026-11-12T01:00:02.000Z", output: 50),
-            #"{"type":"assistant","timestamp":"2026-11-12T01:00:03.000Z","message":{"id":"msg_s","model":"<synthetic>","usage":{"input_tokens":1,"output_tokens":1}}}"#,
-        ].joined(separator: "\n") + "\n"
-        let second = [
-            claudeLine("msg_1", "req_1", time: "2026-11-12T01:00:02.000Z", output: 50, detail: false),
-            #"{"type":"assistant","timestamp":"2026-11-12T02:00:00.000Z","requestId":"req_2","message":{"id":"msg_2","model":"claude-haiku-4-5","usage":{"input_tokens":7,"output_tokens":3}}}"#,
-        ].joined(separator: "\n") + "\n"
-        _ = try write(first, to: ".claude/projects/a/one.jsonl")
-        _ = try write(second, to: ".claude/projects/b/two.jsonl")
-        let scanner = ClaudeLogScanner(home: temp)
-        let totals = claudeTotals(scanner, now: now)
-        XCTAssertEqual(totals.count, 2)
-        let opus = try XCTUnwrap(totals["claude-opus-4-5-20251101"])
-        XCTAssertEqual(opus.input, 10)
-        XCTAssertEqual(opus.output, 50)
-        XCTAssertEqual(opus.cacheWrite5m + opus.cacheWrite1h, 300)
-        XCTAssertEqual(opus.cacheRead, 1000)
-        XCTAssertEqual(totals["claude-haiku-4-5"], TokenUsage(input: 7, output: 3))
-        XCTAssertEqual(scanner.cachedRecordCount, 3)
-        XCTAssertEqual(claudeTotals(scanner, now: now), totals)
-    }
-
-    func testClaudeLogScanReadsOnlyAppendedLines() throws {
-        let now = DateParsing.parse("2026-11-12T03:00:00Z")!
-        let url = try write(claudeLine("msg_1", "req_1", time: "2026-11-12T01:00:01.000Z", output: 5) + "\n", to: ".claude/projects/a/one.jsonl")
-        let scanner = ClaudeLogScanner(home: temp)
-        XCTAssertEqual(claudeTotals(scanner, now: now)["claude-opus-4-5-20251101"]?.output, 5)
-
-        let partial = claudeLine("msg_2", "req_2", time: "2026-11-12T01:10:00.000Z", output: 7)
-        let handle = try FileHandle(forWritingTo: url)
-        try handle.seekToEnd()
-        try handle.write(contentsOf: Data(partial.prefix(40).utf8))
-        try handle.close()
-        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: url.path)
-        XCTAssertEqual(claudeTotals(scanner, now: now)["claude-opus-4-5-20251101"]?.output, 5)
-
-        let rest = try FileHandle(forWritingTo: url)
-        try rest.seekToEnd()
-        try rest.write(contentsOf: Data((String(partial.dropFirst(40)) + "\n").utf8))
-        try rest.close()
-        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(10)], ofItemAtPath: url.path)
-        XCTAssertEqual(claudeTotals(scanner, now: now)["claude-opus-4-5-20251101"]?.output, 12)
-        XCTAssertEqual(scanner.cachedRecordCount, 2)
-    }
-
-    func testCodexLogScanUsesTotalsAndSkipsDuplicates() throws {
-        let now = DateParsing.parse("2026-11-12T03:00:00Z")!
+    func testCodexRateLimitsFromLocalLog() throws {
         let log = """
         {"timestamp":"2026-11-12T01:00:00.000Z","type":"turn_context","payload":{"model":"gpt-5-codex"}}
-        {"timestamp":"2026-11-12T01:00:01.000Z","type":"event_msg","payload":{"type":"token_count","info":null}}
-        {"timestamp":"2026-11-12T01:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":100},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":100}},"rate_limits":{"primary":{"used_percent":12.5,"window_minutes":300,"resets_at":1794445200},"secondary":{"used_percent":40,"window_minutes":10080,"resets_in_seconds":3600}}}}
-        {"timestamp":"2026-11-12T01:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":100},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":100}}}}
-        {"timestamp":"2026-11-12T01:00:04.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":3000,"cached_input_tokens":1400,"output_tokens":350},"last_token_usage":{"input_tokens":2000,"cached_input_tokens":1000,"output_tokens":250}}}}
+        {"timestamp":"2026-11-12T01:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000}},"rate_limits":{"primary":{"used_percent":12.5,"window_minutes":300,"resets_at":1794445200},"secondary":{"used_percent":40,"window_minutes":10080,"resets_in_seconds":3600}}}}
+        {"timestamp":"2026-11-12T01:00:04.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":3000}}}}
+        {"timestamp":"2026-11-12T01:00:05.000Z","type":"event_msg","payload":{"type":"token_count","rate_lim
 
         """
         _ = try write(log, to: ".codex/sessions/2026/11/12/rollout.jsonl")
         let scanner = CodexLogScanner(codexHome: temp.appendingPathComponent(".codex"))
-        var aggregate = UsageAggregate(now: now)
-        scanner.collect(since: Date(timeIntervalSince1970: 0), into: &aggregate)
-        XCTAssertEqual(aggregate.totals[.month]?[.codex], ["gpt-5-codex": TokenUsage(input: 1600, output: 350, cacheRead: 1400)])
-
         let limits = scanner.latestRateLimits(now: Date())
         XCTAssertEqual(limits?.source, .localLog)
         XCTAssertEqual(limits?.windows.map(\.label), ["5시간", "주간"])
@@ -258,58 +191,7 @@ final class TokenBarCoreTests: XCTestCase {
         SHA256.hash(data: content).map { String(format: "%02x", $0) }.joined()
     }
 
-    func testPricingLookupAndCost() {
-        let table = PriceTable(exact: [
-            "claude-opus-4-5": ModelPrice(input: 5, output: 25, cacheWrite5m: 6.25, cacheWrite1h: 10, cacheRead: 0.5),
-            "gpt-5": ModelPrice(input: 1.25, output: 10, cacheRead: 0.125),
-        ])
-        XCTAssertEqual(table.price(for: "claude-opus-4-5-20251101")?.output, 25)
-        XCTAssertEqual(table.price(for: "claude-opus-4-5[1m]")?.input, 5)
-        XCTAssertEqual(table.price(for: "gpt-5-codex")?.cacheRead, 0.125)
-        XCTAssertEqual(table.price(for: "claude-sonnet-9")?.input, 3)
-        XCTAssertNil(table.price(for: "mystery-model"))
-
-        let usage = TokenUsage(input: 1_000_000, output: 1_000_000, cacheWrite5m: 1_000_000, cacheWrite1h: 1_000_000, cacheRead: 1_000_000)
-        XCTAssertEqual(table.price(for: "claude-opus-4-5")!.cost(usage), 46.75, accuracy: 0.0001)
-    }
-
-    func testLiteLLMParsing() {
-        let body = """
-        {"sample_spec":{"litellm_provider":"one of https://docs.litellm.ai"},
-         "claude-test":{"litellm_provider":"anthropic","input_cost_per_token":0.000005,"output_cost_per_token":0.000025,"cache_read_input_token_cost":5e-07},
-         "gemini-x":{"litellm_provider":"vertex_ai","input_cost_per_token":1e-06,"output_cost_per_token":1e-06}}
-        """
-        let prices = PriceTable.fromLiteLLM(Data(body.utf8))
-        XCTAssertEqual(prices.count, 1)
-        XCTAssertEqual(prices["claude-test"]?.input ?? 0, 5, accuracy: 0.0001)
-        XCTAssertEqual(prices["claude-test"]?.cacheRead ?? 0, 0.5, accuracy: 0.0001)
-        XCTAssertEqual(prices["claude-test"]?.cacheWrite5m ?? 0, 6.25, accuracy: 0.0001)
-    }
-
-    func testCostReportBucketsByPeriod() {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "Asia/Seoul")!
-        let now = DateParsing.parse("2026-11-12T12:00:00+09:00")!
-        let usage = TokenUsage(input: 1_000_000)
-        var aggregate = UsageAggregate(now: now, calendar: calendar)
-        aggregate.add(provider: .claude, model: "claude-sonnet-4-5", timestamp: DateParsing.parse("2026-11-12T00:30:00+09:00")!, usage: usage)
-        aggregate.add(provider: .claude, model: "claude-sonnet-4-5", timestamp: DateParsing.parse("2026-11-11T23:30:00+09:00")!, usage: usage)
-        aggregate.add(provider: .codex, model: "gpt-5-codex", timestamp: DateParsing.parse("2026-10-20T10:00:00+09:00")!, usage: usage)
-        aggregate.add(provider: .codex, model: "mystery-model", timestamp: DateParsing.parse("2026-11-12T10:00:00+09:00")!, usage: usage)
-        let report = CostCalculator.report(aggregate: aggregate, prices: PriceTable(), now: now)
-        XCTAssertEqual(report.summary(.today, .claude).cost, 3, accuracy: 0.0001)
-        XCTAssertEqual(report.summary(.week, .claude).cost, 6, accuracy: 0.0001)
-        XCTAssertEqual(report.summary(.week, .codex).cost, 0, accuracy: 0.0001)
-        XCTAssertEqual(report.summary(.month, .codex).cost, 1.25, accuracy: 0.0001)
-        XCTAssertEqual(report.summary(.today, .codex).unpricedTokens, 1_000_000)
-        XCTAssertEqual(report.total(.month).tokens, 4_000_000)
-    }
-
     func testFormatting() {
-        XCTAssertEqual(Format.tokens(999), "999")
-        XCTAssertEqual(Format.tokens(12_400_000), "12.4M")
-        XCTAssertEqual(Format.usd(8.214), "$8.21")
-        XCTAssertEqual(Format.usd(123.4), "$123")
         XCTAssertEqual(Format.percent(41.6), "42%")
         let now = Date(timeIntervalSince1970: 0)
         XCTAssertEqual(Format.countdown(to: now.addingTimeInterval(2 * 3_600 + 13 * 60), now: now), "2시간 13분 후 리셋")

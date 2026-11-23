@@ -37,7 +37,6 @@ public struct URLSessionHTTPClient: HTTPClient {
     public static let allowedHosts: Set<String> = [
         "api.anthropic.com",
         "chatgpt.com",
-        "raw.githubusercontent.com",
         "api.github.com",
         "github.com",
         "objects.githubusercontent.com",

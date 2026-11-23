@@ -1,18 +1,6 @@
 import Foundation
 
 public enum Format {
-    public static func tokens(_ count: Int) -> String {
-        let value = Double(count)
-        if value >= 1_000_000_000 { return String(format: "%.2fB", value / 1_000_000_000) }
-        if value >= 1_000_000 { return String(format: "%.1fM", value / 1_000_000) }
-        if value >= 1_000 { return String(format: "%.1fK", value / 1_000) }
-        return "\(count)"
-    }
-
-    public static func usd(_ value: Double) -> String {
-        value >= 100 ? String(format: "$%.0f", value) : String(format: "$%.2f", value)
-    }
-
     public static func percent(_ value: Double) -> String {
         "\(Int(value.rounded()))%"
     }

@@ -1,53 +1,9 @@
 import Foundation
 
-public struct UsageAggregate {
-    let starts: [(period: Period, start: Date)]
-    var totals: [Period: [Provider: [String: TokenUsage]]] = [:]
-
-    public init(now: Date, calendar: Calendar = .current) {
-        starts = Period.allCases.map { ($0, $0.start(now: now, calendar: calendar)) }
-    }
-
-    public mutating func add(provider: Provider, model: String, timestamp: Date, usage: TokenUsage) {
-        for item in starts where timestamp >= item.start {
-            var current = totals[item.period]?[provider]?[model] ?? TokenUsage()
-            current.input += usage.input
-            current.output += usage.output
-            current.cacheWrite5m += usage.cacheWrite5m
-            current.cacheWrite1h += usage.cacheWrite1h
-            current.cacheRead += usage.cacheRead
-            totals[item.period, default: [:]][provider, default: [:]][model] = current
-        }
-    }
-}
-
-public enum CostCalculator {
-    public static func report(aggregate: UsageAggregate, prices: PriceTable, now: Date) -> CostReport {
-        var byPeriod: [Period: [Provider: CostSummary]] = [:]
-        for (period, providers) in aggregate.totals {
-            for (provider, models) in providers {
-                var summary = CostSummary()
-                for (model, usage) in models {
-                    summary.tokens += usage.total
-                    if let price = prices.price(for: model) {
-                        summary.cost += price.cost(usage)
-                    } else {
-                        summary.unpricedTokens += usage.total
-                    }
-                }
-                byPeriod[period, default: [:]][provider] = summary
-            }
-        }
-        return CostReport(byPeriod: byPeriod, generatedAt: now)
-    }
-}
-
 public actor UsageEngine {
     private let claude: ClaudeLimitFetcher
     private let codex: CodexLimitFetcher
-    private let claudeLogs: ClaudeLogScanner
     private let codexLogs: CodexLogScanner
-    private let prices: PriceStore
     private let limitsFile: URL
     private let home: URL
     private var claudeCredentials: ClaudeCredentials?
@@ -62,13 +18,12 @@ public actor UsageEngine {
     ) {
         let support = supportDir ?? home.appendingPathComponent("Library/Application Support/TokenBar")
         SecureFile.prepareDirectory(support)
+        try? FileManager.default.removeItem(at: support.appendingPathComponent("prices.json"))
         let codexHome = CodexPaths.home(userHome: home)
         self.home = home
         self.claude = ClaudeLimitFetcher(client: client)
         self.codex = CodexLimitFetcher(client: client, codexHome: codexHome)
-        self.claudeLogs = ClaudeLogScanner(home: home)
         self.codexLogs = CodexLogScanner(codexHome: codexHome)
-        self.prices = PriceStore(supportDir: support, client: client)
         self.limitsFile = support.appendingPathComponent("limits.json")
         var restored: [Provider: LimitSnapshot] = [:]
         if let raw = try? Data(contentsOf: support.appendingPathComponent("limits.json")),
@@ -156,14 +111,5 @@ public actor UsageEngine {
         if let encoded = try? JSONEncoder().encode(Array(lastGood.values)) {
             SecureFile.write(encoded, to: limitsFile)
         }
-    }
-
-    public func costs(now: Date = Date()) async -> CostReport {
-        let cutoff = Period.month.start(now: now)
-        var aggregate = UsageAggregate(now: now)
-        claudeLogs.collect(since: cutoff, into: &aggregate)
-        codexLogs.collect(since: cutoff, into: &aggregate)
-        let table = await prices.table(now: now)
-        return CostCalculator.report(aggregate: aggregate, prices: table, now: now)
     }
 }

@@ -6,7 +6,6 @@ import TokenBarCore
 @MainActor
 final class UsageStore: ObservableObject {
     @Published private(set) var limits: [Provider: LimitResult] = [:]
-    @Published private(set) var costs: CostReport?
     @Published private(set) var system: SystemSample?
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastRefresh: Date?
@@ -25,8 +24,6 @@ final class UsageStore: ObservableObject {
     private let updater: Updater
     private var menuVisible = false
     private var lastUpdateCheck: Date?
-    private var lastCostRefresh: Date?
-    private var refreshingCosts = false
 
     init() {
         let info = Bundle.main.infoDictionary ?? [:]
@@ -80,7 +77,6 @@ final class UsageStore: ObservableObject {
             await sampleSystem()
             await refreshLimits()
             await refreshFanHelper()
-            await refreshCosts(force: false)
             await checkForUpdate(force: false)
         }
     }
@@ -229,23 +225,6 @@ final class UsageStore: ObservableObject {
         lastRefresh = Date()
         isRefreshing = false
         onChange?()
-    }
-
-    func refreshCosts(force: Bool) async {
-        guard !refreshingCosts else { return }
-        if !force, let last = lastCostRefresh, Date().timeIntervalSince(last) < 60 { return }
-        refreshingCosts = true
-        let engine = self.engine
-        costs = await Task.detached(priority: .utility) {
-            await engine.costs()
-        }.value
-        lastCostRefresh = Date()
-        refreshingCosts = false
-    }
-
-    func refreshAll() async {
-        await refreshLimits()
-        await refreshCosts(force: true)
     }
 
     func checkForUpdate(force: Bool) async {

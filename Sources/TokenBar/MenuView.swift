@@ -11,8 +11,6 @@ struct MenuView: View {
                 ProviderSection(provider: provider, result: store.limits[provider])
             }
             Divider()
-            CostSection(report: store.costs)
-            Divider()
             SystemSection(sample: store.system)
             if let fans = store.system?.fans, !fans.isEmpty {
                 Divider()
@@ -37,7 +35,7 @@ struct MenuView: View {
                 .font(.callout)
                 Spacer()
                 Button(store.isRefreshing ? "갱신 중…" : "새로고침") {
-                    Task { await store.refreshAll() }
+                    Task { await store.refreshLimits() }
                 }
                 .disabled(store.isRefreshing)
                 Button("종료") {
@@ -204,67 +202,6 @@ struct UsageBar: View {
             }
         }
         .frame(height: 6)
-    }
-}
-
-struct CostSection: View {
-    let report: CostReport?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("API 환산 비용")
-                .font(.headline)
-            if let report {
-                Grid(alignment: .trailing, horizontalSpacing: 14, verticalSpacing: 4) {
-                    GridRow {
-                        Text("")
-                            .gridColumnAlignment(.leading)
-                        ForEach(Period.allCases, id: \.self) { period in
-                            Text(period.title)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    ForEach(Provider.allCases, id: \.self) { provider in
-                        GridRow {
-                            Text(provider == .claude ? "Claude Code" : "Codex CLI")
-                                .font(.callout)
-                            ForEach(Period.allCases, id: \.self) { period in
-                                Text(Format.usd(report.summary(period, provider).cost))
-                                    .font(.callout.monospacedDigit())
-                            }
-                        }
-                    }
-                    GridRow {
-                        Text("합계")
-                            .font(.callout)
-                            .fontWeight(.semibold)
-                        ForEach(Period.allCases, id: \.self) { period in
-                            Text(Format.usd(report.total(period).cost))
-                                .font(.callout.monospacedDigit())
-                                .fontWeight(.semibold)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Text(caption(report))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text("로컬 로그를 읽는 중…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func caption(_ report: CostReport) -> String {
-        var text = "오늘 \(Format.tokens(report.total(.today).tokens)) 토큰 · CLI 로컬 로그 기준"
-        if report.total(.month).unpricedTokens > 0 {
-            text += " · 단가 미등록 모델 제외"
-        }
-        return text
     }
 }
 
